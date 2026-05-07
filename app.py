@@ -48,8 +48,13 @@ if st.button("Generar MT700"):
         st.warning("Sube archivos")
     else:
         text = ""
-        for f in files:
-            text += f.read().decode(errors="ignore")
+for f in files:
+    content = f.read().decode(errors="ignore")
+
+    # Limitar tamaño (MUY IMPORTANTE)
+    content = content[:3000]   # solo primeros 3000 caracteres
+
+    text += content + "\n\n"
 
         mt700 = call_llm(GEN_PROMPT, text)
         validation = call_llm(VAL_PROMPT, mt700)
