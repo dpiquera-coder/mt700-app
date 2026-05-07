@@ -22,28 +22,44 @@ def call_llm(prompt, text):
         if response.status_code != 200:
             return f"Error API: {response.status_code} - {response.text}"
 
-        try:
-            result = response.json()
+        result = response.json()
 
-            if isinstance(result, list):
-                return result[0].get("generated_text", "Sin respuesta")
-            else:
-                return str(result)
-
-        except:
-            return "Error: respuesta no válida"
+        if isinstance(result, list):
+            return result[0].get("generated_text", "Sin respuesta")
+        else:
+            return str(result)
 
     except Exception as e:
-        return f"Error conexión: {str(e)}"
+        return f"Error: {str(e)}"
 
 
-# ✅ BOTÓN PRINCIPAL
-if st.button("Generar MT700"):
+# ✅ BOTÓN
+if st.button("🚀 Generar MT700"):
+
+    st.write("✅ Botón pulsado")   # 👈 DEBUG visual
 
     if not files:
         st.warning("Sube archivos")
-
     else:
         text = ""
 
-        # ✅ LEER ARCHIVOS
+        for f in files:
+            content = f.read().decode(errors="ignore")
+            content = content[:3000]
+            text += content + "\n\n"
+
+        st.write("📄 Texto procesado")  # 👈 DEBUG
+
+        mt700 = call_llm(GEN_PROMPT, text)
+        validation = call_llm(VAL_PROMPT, mt700)
+
+        st.session_state["mt700"] = mt700
+        st.session_state["validation"] = validation
+
+        st.success("✅ Generado correctamente")
+
+
+# ✅ RESULTADOS
+if "mt700" in st.session_state:
+    st.subheader("Resultado")
+
