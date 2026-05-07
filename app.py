@@ -1,22 +1,28 @@
 import streamlit as st
-from openai import OpenAI
+import requests
 import os
 
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+
 
 st.title("MT700 Generator")
 
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 
-def call_llm(prompt, text):
-    response = client.responses.create(
-        model="gpt-4o-mini",
-        input=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": text}
-        ]
+ddef call_llm(prompt, text):
+    API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-large"
+
+    response = requests.post(
+        API_URL,
+        json={"inputs": prompt + "\n\n" + text}
     )
-    return response.output[0].content[0].text
+
+    result = response.json()
+
+    if isinstance(result, list):
+        return result[0]["generated_text"]
+    else:
+        return str(result)
+
 
 
 GEN_PROMPT = "Genera un MT700 completo sin explicaciones"
