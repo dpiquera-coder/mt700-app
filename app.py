@@ -2,6 +2,9 @@ import streamlit as st
 import requests
 import os
 
+GEN_PROMPT = "Genera un MT700 completo en formato SWIFT sin explicaciones"
+VAL_PROMPT = "Valida el MT700 detectando errores y di OK o ERROR"
+
 
 
 st.title("MT700 Generator")
