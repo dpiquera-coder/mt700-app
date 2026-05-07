@@ -11,17 +11,32 @@ files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 def call_llm(prompt, text):
     API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-large"
 
-    response = requests.post(
-        API_URL,
-        json={"inputs": prompt + "\n\n" + text}
-    )
+    try:
+        response = requests.post(
+            API_URL,
+            json={"inputs": prompt + "\n\n" + text},
+            timeout=30
+        )
 
-    result = response.json()
+        # Si no es 200 → error
+        if response.status_code != 200:
+            return f"Error API: {response.status_code} - {response.text}"
 
-    if isinstance(result, list):
-        return result[0]["generated_text"]
-    else:
-        return str(result)
+        # Intentar parsear JSON
+        try:
+            result = response.json()
+
+            if isinstance(result, list):
+                return result[0].get("generated_text", "Sin respuesta")
+            else:
+                return str(result)
+
+        except Exception:
+            return "Error: respuesta no válida del modelo"
+
+    except Exception as e:
+        return f"Error conexión: {str(e)}"
+
 
 
 
