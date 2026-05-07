@@ -10,7 +10,7 @@ VAL_PROMPT = "Valida el MT700 detectando errores y di OK o ERROR"
 
 
 def call_llm(prompt, text):
-    API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-large"
+    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
 
     try:
         response = requests.post(
