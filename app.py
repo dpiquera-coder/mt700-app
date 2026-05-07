@@ -9,15 +9,15 @@ st.title("MT700 Generator")
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 
 def call_llm(prompt, text):
-    response = client.chat.completions.create(
-        model="gpt-5",
-        messages=[
+    response = client.responses.create(
+        model="gpt-4o-mini",
+        input=[
             {"role": "system", "content": prompt},
             {"role": "user", "content": text}
-        ],
-        temperature=0.2
+        ]
     )
-    return response.choices[0].message.content
+    return response.output[0].content[0].text
+
 
 GEN_PROMPT = "Genera un MT700 completo sin explicaciones"
 VAL_PROMPT = "Valida el MT700, detecta errores y da OK o ERROR"
