@@ -8,7 +8,7 @@ st.title("MT700 Generator")
 
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 
-ddef call_llm(prompt, text):
+def call_llm(prompt, text):
     API_URL = "https://api-inference.huggingface.co/models/google/flan-t5-large"
 
     response = requests.post(
