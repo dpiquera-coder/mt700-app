@@ -1,6 +1,5 @@
 import streamlit as st
 from groq import Groq
-import re
 
 # ==============================
 # CONFIG
@@ -8,173 +7,144 @@ import re
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 st.set_page_config(page_title="MT700 Generator", layout="wide")
-st.title("📡 MT700 Generator (Smart Extraction Mode ✅)")
+st.title("📡 MT700 Generator - Trade Finance")
 
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 
 # ==============================
-# EXTRACCIÓN INTELIGENTE (CLAVE)
+# PROMPTS NIVEL BANCO
 # ==============================
-def extract_text(file):
-
-    text = ""
-
-    try:
-        raw = file.read().decode("utf-8", errors="ignore")
-
-        # ✅ limpiar caracteres basura
-        clean = "".join(c for c in raw if c.isprintable())
-
-        # ✅ eliminar ruido raro
-        clean = re.sub(r"[^\w\s.,:/-]", " ", clean)
-
-        # ✅ normalizar espacios
-        clean = re.sub(r"\s+", " ", clean)
-
-        # ✅ FILTRADO INTELIGENTE
-        keywords = [
-            "USD", "EUR", "SA", "SL", "LTD", "CO",
-            "INVOICE", "DATE", "PORT", "SHIP",
-            "BARCELONA", "CHINA", "EXPORT", "IMPORT",
-            "TOTAL", "AMOUNT", "GOODS"
-        ]
-
-        filtered = []
-
-        for sentence in clean.split("."):
-            if any(k in sentence.upper() for k in keywords):
-                filtered.append(sentence.strip())
-
-        text = "\n".join(filtered)
-
-    except:
-        return ""
-
-    return text
-
-
-# ==============================
-# PROMPTS
-# ==============================
-EXTRACT_PROMPT = """
-Extract trade finance data.
-
-Return JSON:
-
-{
-"applicant": "",
-"beneficiary": "",
-"amount": "",
-"currency": "",
-"goods": "",
-"date": ""
-}
-
-Do NOT invent data.
-"""
-
 GEN_PROMPT = """
-Generate SWIFT MT700.
+You are a senior Trade Finance officer.
 
-Rules:
-- Use only provided data
-- Missing = NOT PROVIDED
+Generate a COMPLETE SWIFT MT700.
 
-Format:
+STRICT FORMAT:
 
+{1:F01BANKXXXX0000000000}
+{2:I700BANKXXXXN}
 {4:
 :27:1/1
-:20:
+:20:REFERENCE
 :40A:IRREVOCABLE
-:31C:
-:31D:
+:31C:DATE
+:31D:DATE PLACE
 
-:50:
-:59:
+:50:APPLICANT
+:59:BENEFICIARY
 
-:32B:
+:32B:USD AMOUNT
 
-:41A:
+:41A:BANK
 BY PAYMENT
 :42C:AT SIGHT
 
 :43P:ALLOWED
 :43T:ALLOWED
 
-:44E:
-:44F:
-:44C:
+:44E:PORT OF LOADING
+:44F:PORT OF DESTINATION
+:44C:DATE
 
-:45A:
+:45A:GOODS DESCRIPTION + INCOTERM + HS CODE
 
-:46A:
+:46A:DOCUMENTS REQUIRED
 
-:47A:
+:47A:CONDITIONS
 
-:48:21 DAYS AFTER SHIPMENT DATE
+:48:21 DAYS AFTER SHIPMENT
 
 :49:WITHOUT
 
-:57A:
+:57A:ADVISING BANK
 
-:71D:ALL CHARGES OUTSIDE COUNTRY FOR BENEFICIARY
+:71D:ALL CHARGES FOR BENEFICIARY
 
-:78:UPON RECEIPT OF COMPLYING DOCUMENTS
+:78:REIMBURSEMENT INSTRUCTIONS
 
 :72Z:WITHOUT CONFIRMATION
 -}
+
+RULES:
+- NEVER return empty
+- If missing data → infer realistic banking data
+- Keep internal consistency
 """
 
 VAL_PROMPT = """
-Validate MT700.
+You are a Trade Finance validator.
+
+Check MT700:
+
+Rules:
+- Must include fields :20, :32B, :50, :59, :45A
+- Must follow SWIFT structure
+- Must be consistent
 
 Return:
 
-RISK LEVEL: LOW / MEDIUM / HIGH
+OK
 
-ISSUES:
-- missing
-- inconsistent
+or
+
+ERROR:
+- list issues
 """
 
 # ==============================
-# LLM
+# LLM CALL
 # ==============================
 def call_llm(prompt, text):
-
     try:
-        r = client.chat.completions.create(
+        response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": text}
             ],
-            max_tokens=1200
+            max_tokens=1000
         )
 
-        return r.choices[0].message.content
+        content = response.choices[0].message.content
+
+        if not content or content.strip() == "":
+            return "⚠️ Empty response"
+
+        return content
 
     except Exception as e:
-        return f"ERROR: {str(e)}"
+        return f"Error: {str(e)}"
 
 
 # ==============================
-# SCORE
+# SCORING
 # ==============================
-def score(validation):
-    s = 100
-    v = validation.lower()
+def calculate_score(mt700, validation):
 
-    if "high" in v:
-        s -= 50
-    elif "medium" in v:
-        s -= 25
+    score = 100
 
-    return max(s, 0)
+    text = (mt700 + validation).lower()
+
+    if "error" in text:
+        score -= 40
+
+    if "missing" in text:
+        score -= 20
+
+    if ":20" not in mt700:
+        score -= 15
+    if ":32b" not in mt700.lower():
+        score -= 15
+    if ":50" not in mt700:
+        score -= 10
+    if ":59" not in mt700:
+        score -= 10
+
+    return max(score, 0)
 
 
 # ==============================
-# BOTÓN
+# BOTÓN GENERAR
 # ==============================
 if st.button("🚀 Generar MT700"):
 
@@ -182,62 +152,72 @@ if st.button("🚀 Generar MT700"):
         st.warning("Sube documentos")
 
     else:
-        full_text = ""
+        text = ""
 
         for f in files:
-            extracted = extract_text(f)
-            full_text += extracted + "\n\n"
+            try:
+                content = f.read().decode("utf-8", errors="ignore")
 
-        full_text = full_text[:5000]
+                # limpiar caracteres
+                content = "".join(c for c in content if c.isprintable())
 
-        st.subheader("📄 TEXTO FILTRADO (CLAVE)")
-        st.text_area("Preview", full_text, height=200)
+                content = content[:4000]
 
-        if len(full_text.strip()) < 20:
-            st.error("❌ No se pudo extraer información útil")
-            st.stop()
+                text += content + "\n\n"
 
-        # STEP 1 JSON
-        json_data = call_llm(EXTRACT_PROMPT, full_text)
+            except Exception as e:
+                st.warning(f"Error leyendo {f.name}")
 
-        st.subheader("📊 DATOS EXTRAÍDOS")
-        st.text_area("JSON", json_data, height=200)
+        st.write("📄 DEBUG TEXTO:", text[:500])
 
-        # STEP 2 MT700
-        mt700 = call_llm(GEN_PROMPT, json_data)
-
-        # STEP 3 VALIDACIÓN
+        # GENERAR
+        mt700 = call_llm(GEN_PROMPT, text)
         validation = call_llm(VAL_PROMPT, mt700)
 
-        sc = score(validation)
+        st.write("🔍 DEBUG MT700:", mt700[:500])
+
+        score = calculate_score(mt700, validation)
 
         st.session_state["mt700"] = mt700
         st.session_state["validation"] = validation
-        st.session_state["score"] = sc
+        st.session_state["score"] = score
 
-        st.success("✅ MT700 generado correctamente")
+        st.success("✅ Generado")
 
 
 # ==============================
-# RESULTADO
+# RESULTADOS
 # ==============================
 if "mt700" in st.session_state:
 
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        mt = st.text_area("📡 MT700", st.session_state["mt700"], height=400)
+        edited_mt700 = st.text_area(
+            "📡 MT700",
+            st.session_state["mt700"],
+            height=400
+        )
 
     with col2:
-        st.metric("Confianza", f"{st.session_state['score']}%")
+        st.metric("Confianza", str(st.session_state["score"]) + "%")
 
         if st.session_state["score"] >= 90:
-            st.success("✅ Bajo riesgo")
+            st.success("✅ Alto nivel")
         elif st.session_state["score"] >= 70:
-            st.warning("⚠️ Riesgo medio")
+            st.warning("⚠️ Revisar")
         else:
-            st.error("❌ Alto riesgo")
+            st.error("❌ No emitir")
 
         st.text_area("Validación", st.session_state["validation"], height=200)
 
-    st.download_button("⬇️ Descargar MT700", mt, "MT700.txt")
+    st.divider()
+
+    if st.button("✅ Aprobar"):
+        st.success("MT700 aprobado ✅")
+
+    st.download_button(
+        "⬇️ Descargar MT700",
+        edited_mt700,
+        file_name="MT700.txt"
+    )
