@@ -1,8 +1,12 @@
 import streamlit as st
 from groq import Groq
+
 import pdfplumber
 import io
 import re
+import pytesseract
+from PIL import Image
+from docx import Document
 
 # ==============================
 # CONFIG
@@ -10,50 +14,40 @@ import re
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 st.set_page_config(page_title="MT700 Generator", layout="wide")
-st.title("📡 MT700 Generator (PDF Real + No Hallucinations)")
+st.title("📡 MT700 Generator (PDF + OCR + Word)")
 
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 
 # ==============================
-# PROMPT EXTRACCIÓN
+# PROMPTS
 # ==============================
 EXTRACT_PROMPT = """
-Extract structured trade finance data from the text.
+Extract structured trade finance data from text.
 
 Return JSON ONLY:
 
 {
-  "applicant": "",
-  "beneficiary": "",
-  "amount": "",
-  "currency": "",
-  "issue_date": "",
-  "expiry_date": "",
-  "shipment_date": "",
-  "goods": "",
-  "incoterm": ""
+"applicant": "",
+"beneficiary": "",
+"amount": "",
+"currency": "",
+"issue_date": "",
+"expiry_date": "",
+"shipment_date": "",
+"goods": "",
+"incoterm": ""
 }
 
-RULES:
-- DO NOT INVENT DATA
-- If missing → null
-- Only extract real values
+DO NOT INVENT DATA
 """
 
-# ==============================
-# PROMPT GENERACIÓN (FORMATO SWIFT)
-# ==============================
 GEN_PROMPT = """
-You are a Trade Finance officer.
-
-Generate a VALID SWIFT MT700.
+Generate SWIFT MT700.
 
 RULES:
-- DO NOT INVENT DATA
-- If missing → NOT PROVIDED
-- Each field MUST be on its own line
-
-FORMAT:
+- No invent data
+- Missing → NOT PROVIDED
+- Strict SWIFT format
 
 {4:
 :27:1/1
@@ -61,66 +55,40 @@ FORMAT:
 :40A:IRREVOCABLE
 :31C:
 :31D:
-
 :50:
 :59:
-
 :32B:
-
 :41A:
-BY PAYMENT
 :42C:AT SIGHT
-
 :43P:ALLOWED
 :43T:ALLOWED
-
 :44E:
 :44F:
 :44C:
-
 :45A:
-
 :46A:
-
 :47A:
-
 :48:21 DAYS AFTER SHIPMENT DATE
-
 :49:WITHOUT
-
 :57A:
-
-:71D:ALL CHARGES OUTSIDE COUNTRY FOR BENEFICIARY
-
+:71D:
 :78:
-UPON RECEIPT OF COMPLYING DOCUMENTS
-
-:72Z:WITHOUT CONFIRMATION
+:72Z:
 -}
-
-OUTPUT ONLY MT700.
 """
 
-# ==============================
-# VALIDACIÓN
-# ==============================
 VAL_PROMPT = """
-You are a Trade Finance auditor.
-
-Analyze MT700.
+Validate MT700.
 
 Return:
-
 RISK LEVEL: LOW / MEDIUM / HIGH
 
 ISSUES:
-- missing fields
-- inconsistencies
-- suspicious data
+- problems
 """
 
 # ==============================
-# LLM CALL
+# LLM
 # ==============================
 def call_llm(prompt, text):
     try:
@@ -140,7 +108,6 @@ def call_llm(prompt, text):
 # SCORE
 # ==============================
 def calculate_score(validation):
-
     score = 100
     val = validation.lower()
 
@@ -149,16 +116,70 @@ def calculate_score(validation):
     elif "medium" in val:
         score -= 25
 
-    if "missing" in val:
-        score -= 15
-
-    if "suspicious" in val:
-        score -= 40
-
     return max(score, 0)
 
 # ==============================
-# GENERACIÓN
+# EXTRACT TEXT SMART
+# ==============================
+def extract_text_from_file(file):
+
+    text = ""
+
+    try:
+        filename = file.name.lower()
+
+        # ======================
+        # PDF
+        # ======================
+        if filename.endswith(".pdf"):
+
+            pdf_text = ""
+
+            with pdfplumber.open(io.BytesIO(file.read())) as pdf:
+                for page in pdf.pages:
+                    t = page.extract_text()
+                    if t:
+                        pdf_text += t + "\n"
+
+            # 👉 si no hay texto → OCR
+            if len(pdf_text.strip()) < 50:
+
+                st.warning(f"⚠️ OCR activado para {file.name}")
+
+                file.seek(0)
+
+                images = pdfplumber.open(io.BytesIO(file.read())).pages
+
+                for page in images:
+                    im = page.to_image().original
+                    ocr_text = pytesseract.image_to_string(im)
+                    pdf_text += ocr_text + "\n"
+
+            text += pdf_text
+
+        # ======================
+        # WORD
+        # ======================
+        elif filename.endswith(".docx"):
+
+            doc = Document(file)
+            for para in doc.paragraphs:
+                text += para.text + "\n"
+
+        # ======================
+        # TEXT / OTROS
+        # ======================
+        else:
+            text += file.read().decode("utf-8", errors="ignore")
+
+    except Exception as e:
+        st.warning(f"Error leyendo {file.name}: {e}")
+
+    return text
+
+
+# ==============================
+# BOTÓN
 # ==============================
 if st.button("🚀 Generar MT700"):
 
@@ -169,42 +190,35 @@ if st.button("🚀 Generar MT700"):
         text = ""
 
         for f in files:
-            try:
-                if f.name.lower().endswith(".pdf"):
-                    with pdfplumber.open(io.BytesIO(f.read())) as pdf:
-                        for page in pdf.pages:
-                            page_text = page.extract_text()
-                            if page_text:
-                                text += page_text + "\n\n"
-                else:
-                    content = f.read().decode("utf-8", errors="ignore")
-                    text += content + "\n\n"
+            extracted = extract_text_from_file(f)
+            text += extracted + "\n\n"
 
-            except Exception as e:
-                st.warning(f"Error leyendo {f.name}")
-
-        # ✅ LIMPIAR TEXTO
+        # limpiar texto
         text = re.sub(r"\s+", " ", text)
-        text = text[:8000]
+        text = text[:10000]
 
-        st.subheader("📄 Texto extraído del PDF")
-        st.text_area("Preview", text[:1000], height=200)
+        st.subheader("📄 Texto limpio")
+        st.text_area("Preview", text[:1500], height=200)
 
-        # ======================
-        # STEP 1: EXTRACCIÓN
-        # ======================
-        extracted = call_llm(EXTRACT_PROMPT, text)
-
-        st.subheader("📊 Datos extraídos (JSON)")
-        st.text_area("JSON", extracted, height=200)
+        if len(text.strip()) < 50:
+            st.error("❌ No se pudo extraer texto utilizable")
+            st.stop()
 
         # ======================
-        # STEP 2: MT700
+        # EXTRACCION
         # ======================
-        mt700 = call_llm(GEN_PROMPT, extracted)
+        json_data = call_llm(EXTRACT_PROMPT, text)
+
+        st.subheader("📊 JSON")
+        st.text_area("Datos", json_data, height=200)
 
         # ======================
-        # STEP 3: VALIDACIÓN
+        # MT700
+        # ======================
+        mt700 = call_llm(GEN_PROMPT, json_data)
+
+        # ======================
+        # VALIDACION
         # ======================
         validation = call_llm(VAL_PROMPT, mt700)
 
@@ -214,41 +228,28 @@ if st.button("🚀 Generar MT700"):
         st.session_state["validation"] = validation
         st.session_state["score"] = score
 
-        st.success("✅ Proceso completo generado")
+        st.success("✅ Generado")
 
 # ==============================
-# RESULTADOS
+# RESULTADO
 # ==============================
 if "mt700" in st.session_state:
 
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        edited_mt700 = st.text_area(
-            "📡 MT700 generado",
-            st.session_state["mt700"],
-            height=400
-        )
+        mt = st.text_area("📡 MT700", st.session_state["mt700"], height=400)
 
     with col2:
         st.metric("Confianza", f"{st.session_state['score']}%")
 
         if st.session_state["score"] >= 90:
-            st.success("✅ Bajo riesgo")
+            st.success("✔ Bajo riesgo")
         elif st.session_state["score"] >= 70:
-            st.warning("⚠️ Riesgo medio")
+            st.warning("⚠ Riesgo medio")
         else:
             st.error("❌ Alto riesgo")
 
         st.text_area("🔍 Validación", st.session_state["validation"], height=200)
 
-    st.divider()
-
-    if st.button("✅ Aprobar"):
-        st.success("MT700 aprobado ✅")
-
-    st.download_button(
-        "⬇️ Descargar MT700",
-        edited_mt700,
-        file_name="MT700.txt"
-    )
+    st.download_button("⬇️ Descargar", mt, "MT700.txt")
