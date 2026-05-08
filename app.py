@@ -1,14 +1,6 @@
 import streamlit as st
 from groq import Groq
-
-import pdfplumber
-import fitz  # ✅ PyMuPDF (CLAVE!!)
-import io
 import re
-import requests
-import base64
-from PIL import Image, ImageEnhance
-from docx import Document
 
 # ==============================
 # CONFIG
@@ -16,112 +8,47 @@ from docx import Document
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 st.set_page_config(page_title="MT700 Generator", layout="wide")
-st.title("📡 MT700 Generator (OCR REAL + Word + Bank Mode)")
+st.title("📡 MT700 Generator (Smart Extraction Mode ✅)")
 
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 
 # ==============================
-# OCR CLOUD
-# ==============================
-def ocr_image(image_bytes):
-    try:
-        api_key = st.secrets["OCR_API_KEY"]
-
-        img_base64 = base64.b64encode(image_bytes).decode()
-
-        url = f"https://vision.googleapis.com/v1/images:annotate?key={api_key}"
-
-        body = {
-            "requests": [{
-                "image": {"content": img_base64},
-                "features": [{"type": "TEXT_DETECTION"}]
-            }]
-        }
-
-        response = requests.post(url, json=body).json()
-
-        text = response["responses"][0].get("fullTextAnnotation", {}).get("text", "")
-
-        return text
-
-    except:
-        return ""
-
-# ==============================
-# NUEVO OCR CON PYMuPDF (CLAVE)
-# ==============================
-def extract_pdf_with_ocr(file):
-
-    text = ""
-
-    try:
-        pdf_bytes = file.read()
-
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-        for page in doc:
-
-            # ✅ render alta calidad (CLAVE)
-            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-
-            img_bytes = pix.tobytes("png")
-
-            ocr_text = ocr_image(img_bytes)
-
-            # ✅ limpiar basura OCR
-            ocr_text = re.sub(r"[^\x20-\x7E]+", " ", ocr_text)
-
-            text += ocr_text + "\n"
-
-    except Exception as e:
-        return ""
-
-    return text
-
-
-# ==============================
-# EXTRACT TEXT SMART
+# EXTRACCIÓN INTELIGENTE (CLAVE)
 # ==============================
 def extract_text(file):
 
     text = ""
-    filename = file.name.lower()
 
     try:
-        if filename.endswith(".pdf"):
+        raw = file.read().decode("utf-8", errors="ignore")
 
-            pdf_bytes = file.read()
+        # ✅ limpiar caracteres basura
+        clean = "".join(c for c in raw if c.isprintable())
 
-            pdf_text = ""
+        # ✅ eliminar ruido raro
+        clean = re.sub(r"[^\w\s.,:/-]", " ", clean)
 
-            # ✅ intento texto estructurado
-            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-                for page in pdf.pages:
-                    t = page.extract_text()
-                    if t:
-                        pdf_text += t + "\n"
+        # ✅ normalizar espacios
+        clean = re.sub(r"\s+", " ", clean)
 
-            # ✅ fallback OCR REAL
-            if len(pdf_text.strip()) < 50:
+        # ✅ FILTRADO INTELIGENTE
+        keywords = [
+            "USD", "EUR", "SA", "SL", "LTD", "CO",
+            "INVOICE", "DATE", "PORT", "SHIP",
+            "BARCELONA", "CHINA", "EXPORT", "IMPORT",
+            "TOTAL", "AMOUNT", "GOODS"
+        ]
 
-                st.warning(f"⚠️ OCR AVANZADO activado para {file.name}")
+        filtered = []
 
-                file.seek(0)
-                pdf_text = extract_pdf_with_ocr(file)
+        for sentence in clean.split("."):
+            if any(k in sentence.upper() for k in keywords):
+                filtered.append(sentence.strip())
 
-            text += pdf_text
+        text = "\n".join(filtered)
 
-        elif filename.endswith(".docx"):
-
-            doc = Document(file)
-            for p in doc.paragraphs:
-                text += p.text + "\n"
-
-        else:
-            text += file.read().decode("utf-8", errors="ignore")
-
-    except Exception as e:
-        st.warning(f"Error leyendo {file.name}")
+    except:
+        return ""
 
     return text
 
@@ -130,7 +57,7 @@ def extract_text(file):
 # PROMPTS
 # ==============================
 EXTRACT_PROMPT = """
-Extract structured trade finance data.
+Extract trade finance data.
 
 Return JSON:
 
@@ -139,20 +66,21 @@ Return JSON:
 "beneficiary": "",
 "amount": "",
 "currency": "",
-"issue_date": "",
-"expiry_date": "",
-"shipment_date": "",
 "goods": "",
-"incoterm": ""
+"date": ""
 }
 
-DO NOT INVENT DATA
+Do NOT invent data.
 """
 
 GEN_PROMPT = """
-Generate VALID SWIFT MT700.
+Generate SWIFT MT700.
 
-FORMAT:
+Rules:
+- Use only provided data
+- Missing = NOT PROVIDED
+
+Format:
 
 {4:
 :27:1/1
@@ -195,11 +123,6 @@ BY PAYMENT
 
 :72Z:WITHOUT CONFIRMATION
 -}
-
-RULES:
-- DO NOT INVENT DATA
-- Missing → NOT PROVIDED
-- Each field one line
 """
 
 VAL_PROMPT = """
@@ -234,6 +157,7 @@ def call_llm(prompt, text):
     except Exception as e:
         return f"ERROR: {str(e)}"
 
+
 # ==============================
 # SCORE
 # ==============================
@@ -248,6 +172,7 @@ def score(validation):
 
     return max(s, 0)
 
+
 # ==============================
 # BOTÓN
 # ==============================
@@ -260,25 +185,23 @@ if st.button("🚀 Generar MT700"):
         full_text = ""
 
         for f in files:
-            t = extract_text(f)
-            full_text += t + "\n\n"
+            extracted = extract_text(f)
+            full_text += extracted + "\n\n"
 
-        # limpieza final
-        full_text = re.sub(r"\s+", " ", full_text)
-        full_text = full_text[:12000]
+        full_text = full_text[:5000]
 
-        st.subheader("📄 TEXTO EXTRAÍDO (REAL)")
-        st.text_area("Preview", full_text[:1500], height=200)
+        st.subheader("📄 TEXTO FILTRADO (CLAVE)")
+        st.text_area("Preview", full_text, height=200)
 
-        if len(full_text.strip()) < 50:
-            st.error("❌ No se pudo extraer texto válido")
+        if len(full_text.strip()) < 20:
+            st.error("❌ No se pudo extraer información útil")
             st.stop()
 
         # STEP 1 JSON
         json_data = call_llm(EXTRACT_PROMPT, full_text)
 
-        st.subheader("📊 JSON")
-        st.text_area("Datos", json_data, height=200)
+        st.subheader("📊 DATOS EXTRAÍDOS")
+        st.text_area("JSON", json_data, height=200)
 
         # STEP 2 MT700
         mt700 = call_llm(GEN_PROMPT, json_data)
@@ -293,6 +216,7 @@ if st.button("🚀 Generar MT700"):
         st.session_state["score"] = sc
 
         st.success("✅ MT700 generado correctamente")
+
 
 # ==============================
 # RESULTADO
@@ -316,4 +240,4 @@ if "mt700" in st.session_state:
 
         st.text_area("Validación", st.session_state["validation"], height=200)
 
-    st.download_button("⬇️ Descargar", mt, "MT700.txt")
+    st.download_button("⬇️ Descargar MT700", mt, "MT700.txt")
