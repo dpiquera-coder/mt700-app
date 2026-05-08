@@ -3,3 +3,6 @@ openai
 requests
 groq
 pdfplumber
+python-docx
+pytesseract
+Pillow
