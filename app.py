@@ -1,6 +1,5 @@
 import streamlit as st
 from groq import Groq
-import json
 
 # ==============================
 # CONFIG
@@ -8,17 +7,17 @@ import json
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 st.set_page_config(page_title="MT700 Generator", layout="wide")
-st.title("📡 MT700 Generator - Structured Trade Finance")
+st.title("📡 MT700 Generator (Structured + No Hallucinations)")
 
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 
 # ==============================
-# PROMPT 1: EXTRACCIÓN
+# PROMPT EXTRACCIÓN
 # ==============================
 EXTRACT_PROMPT = """
 Extract structured trade finance data from the text.
 
-Return JSON format ONLY:
+Return JSON ONLY:
 
 {
   "applicant": "",
@@ -29,30 +28,29 @@ Return JSON format ONLY:
   "expiry_date": "",
   "shipment_date": "",
   "goods": "",
-  "incoterm": "",
-  "ports": ""
+  "incoterm": ""
 }
 
 RULES:
-- Do NOT invent data
+- DO NOT INVENT DATA
 - If missing → null
-- Extract only what is explicitly present
+- Only extract real values
 """
 
 # ==============================
-# PROMPT 2: GENERACIÓN
+# PROMPT GENERACIÓN
 # ==============================
 GEN_PROMPT = """
 You are a Trade Finance officer.
 
-Generate a SWIFT MT700 from the provided JSON.
+Generate a SWIFT MT700 from JSON input.
 
 RULES:
-- Do NOT invent data
-- If missing → write NOT PROVIDED
+- DO NOT INVENT DATA
+- If missing → NOT PROVIDED
 - Keep consistency
 
-FORMAT STRICT:
+FORMAT:
 
 {4:
 :20:
@@ -89,7 +87,7 @@ OUTPUT ONLY MT700.
 VAL_PROMPT = """
 You are a Trade Finance auditor.
 
-Analyze the MT700.
+Analyze MT700.
 
 Return:
 
@@ -102,7 +100,7 @@ ISSUES:
 """
 
 # ==============================
-# LLM CALL
+# FUNCION LLM
 # ==============================
 def call_llm(prompt, text):
     try:
@@ -115,13 +113,19 @@ def call_llm(prompt, text):
             max_tokens=1000
         )
 
-        return response.choices[0].message.content
+        content = response.choices[0].message.content
+
+        if not content or content.strip() == "":
+            return "EMPTY RESPONSE"
+
+        return content
 
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"ERROR: {str(e)}"
+
 
 # ==============================
-# SCORE
+# SCORING
 # ==============================
 def calculate_score(validation):
 
@@ -134,21 +138,21 @@ def calculate_score(validation):
         score -= 25
 
     if "missing" in val:
-        score -= 20
+        score -= 15
 
     if "suspicious" in val:
         score -= 40
 
     return max(score, 0)
 
+
 # ==============================
-# GENERACIÓN
+# BOTÓN
 # ==============================
 if st.button("🚀 Generar MT700"):
 
     if not files:
         st.warning("Sube documentos")
-
     else:
         text = ""
 
@@ -156,46 +160,50 @@ if st.button("🚀 Generar MT700"):
             try:
                 content = f.read().decode("utf-8", errors="ignore")
 
-                # limpiar basura
+                # limpiar basura binaria
                 content = "".join(c for c in content if c.isprintable())
 
+                # limitar tamaño
                 content = content[:4000]
 
                 text += content + "\n\n"
 
-            except:
+            except Exception:
                 st.warning(f"No se pudo leer {f.name}")
 
-        st.write("📄 DEBUG INPUT:", text[:500])
+        st.subheader("📄 Texto procesado")
+        st.text_area("Preview texto", text[:500], height=150)
 
         # ======================
-        # STEP 1 - EXTRACCIÓN
+        # STEP 1: EXTRACCIÓN
         # ======================
         extracted = call_llm(EXTRACT_PROMPT, text)
 
-        st.subheader("📊 Datos extraídos (JSON)")
-        st.write(extracted)
+        st.subheader("📊 Datos extraídos")
+        st.text_area("JSON extraído", extracted, height=200)
 
         # ======================
-        # STEP 2 - GENERACIÓN
+        # STEP 2: GENERACIÓN MT700
         # ======================
         mt700 = call_llm(GEN_PROMPT, extracted)
 
         # ======================
-        # STEP 3 - VALIDACIÓN
+        # STEP 3: VALIDACIÓN
         # ======================
         validation = call_llm(VAL_PROMPT, mt700)
 
         score = calculate_score(validation)
 
+        # guardar
         st.session_state["mt700"] = mt700
         st.session_state["validation"] = validation
         st.session_state["score"] = score
 
         st.success("✅ Proceso completo generado")
 
+
 # ==============================
-# RESULTADOS
+# RESULTADO
 # ==============================
 if "mt700" in st.session_state:
 
@@ -204,7 +212,7 @@ if "mt700" in st.session_state:
     with col1:
         edited_mt700 = st.text_area(
             "📡 MT700 generado",
-            st.session_state["mt700"],
+            value=st.session_state["mt700"],
             height=400
         )
 
@@ -230,4 +238,3 @@ if "mt700" in st.session_state:
         edited_mt700,
         file_name="MT700.txt"
     )
-``
