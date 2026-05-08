@@ -4,3 +4,4 @@ pdfplumber
 python-docx
 requests
 pillow
+pymupdf
