@@ -6,7 +6,7 @@ import io
 import re
 import requests
 import base64
-from PIL import Image
+from PIL import Image, ImageEnhance
 from docx import Document
 
 # ==============================
@@ -15,12 +15,12 @@ from docx import Document
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 st.set_page_config(page_title="MT700 Generator", layout="wide")
-st.title("📡 MT700 Generator (PDF + OCR Cloud + Word)")
+st.title("📡 MT700 Generator (OCR + Word + Bank Mode)")
 
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 
 # ==============================
-# OCR CLOUD (Google Vision API)
+# OCR CLOUD (Google Vision)
 # ==============================
 def ocr_image(image_bytes):
     try:
@@ -43,11 +43,11 @@ def ocr_image(image_bytes):
 
         return text
 
-    except Exception as e:
+    except:
         return ""
 
 # ==============================
-# EXTRAER TEXTO (SMART)
+# EXTRACT TEXT SMART (PDF + OCR + WORD)
 # ==============================
 def extract_text(file):
 
@@ -55,13 +55,9 @@ def extract_text(file):
     filename = file.name.lower()
 
     try:
-        # ======================
-        # PDF
-        # ======================
         if filename.endswith(".pdf"):
 
             pdf_bytes = file.read()
-
             pdf_text = ""
 
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -70,38 +66,42 @@ def extract_text(file):
                     if t:
                         pdf_text += t + "\n"
 
-            # 👉 si no hay texto → usar OCR cloud
+            # ✅ OCR fallback
             if len(pdf_text.strip()) < 50:
 
                 st.warning(f"⚠️ OCR aplicado a {file.name}")
 
                 with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                     for page in pdf.pages:
+
                         im = page.to_image().original
+
+                        # ✅ mejora OCR
+                        im = im.convert("L")
+                        enhancer = ImageEnhance.Contrast(im)
+                        im = enhancer.enhance(2)
+                        im = im.resize((im.width * 2, im.height * 2))
 
                         buf = io.BytesIO()
                         im.save(buf, format="PNG")
 
                         ocr_text = ocr_image(buf.getvalue())
+
+                        # ✅ limpiar basura OCR
+                        ocr_text = re.sub(r"[^\x00-\x7F]+", " ", ocr_text)
+
                         pdf_text += ocr_text + "\n"
 
             text += pdf_text
 
-        # ======================
-        # DOCX
-        # ======================
         elif filename.endswith(".docx"):
 
             doc = Document(file)
             for p in doc.paragraphs:
                 text += p.text + "\n"
 
-        # ======================
-        # TEXTO
-        # ======================
         else:
-            content = file.read().decode("utf-8", errors="ignore")
-            text += content
+            text += file.read().decode("utf-8", errors="ignore")
 
     except Exception as e:
         st.warning(f"Error leyendo {file.name}")
@@ -110,7 +110,7 @@ def extract_text(file):
 
 
 # ==============================
-# PROMPTS
+# PROMPTS (BANCO REAL)
 # ==============================
 EXTRACT_PROMPT = """
 Extract structured trade finance data.
@@ -130,12 +130,12 @@ Return JSON:
 }
 
 RULES:
-- Do NOT invent data
+- DO NOT INVENT DATA
 - Missing → null
 """
 
 GEN_PROMPT = """
-Generate SWIFT MT700.
+Generate a VALID SWIFT MT700.
 
 STRICT FORMAT:
 
@@ -145,30 +145,46 @@ STRICT FORMAT:
 :40A:IRREVOCABLE
 :31C:
 :31D:
+
 :50:
 :59:
+
 :32B:
+
 :41A:
+BY PAYMENT
 :42C:AT SIGHT
+
 :43P:ALLOWED
 :43T:ALLOWED
+
 :44E:
 :44F:
 :44C:
+
 :45A:
+
 :46A:
+
 :47A:
+
 :48:21 DAYS AFTER SHIPMENT DATE
+
 :49:WITHOUT
+
 :57A:
-:71D:
-:78:
-:72Z:
+
+:71D:ALL CHARGES OUTSIDE COUNTRY FOR BENEFICIARY
+
+:78:UPON RECEIPT OF COMPLYING DOCUMENTS
+
+:72Z:WITHOUT CONFIRMATION
 -}
 
 RULES:
-- No hallucinations
+- DO NOT INVENT DATA
 - Missing → NOT PROVIDED
+- One field per line
 """
 
 VAL_PROMPT = """
@@ -179,12 +195,13 @@ Return:
 RISK LEVEL: LOW / MEDIUM / HIGH
 
 ISSUES:
-- missing
-- inconsistent
+- missing fields
+- wrong data
+- suspicious data
 """
 
 # ==============================
-# LLM
+# LLM CALL
 # ==============================
 def call_llm(prompt, text):
     try:
@@ -203,22 +220,23 @@ def call_llm(prompt, text):
 # ==============================
 # SCORE
 # ==============================
-def score(validation):
-    s = 100
-    v = validation.lower()
+def calculate_score(validation):
 
-    if "high" in v:
-        s -= 50
-    elif "medium" in v:
-        s -= 25
+    score = 100
+    val = validation.lower()
 
-    if "missing" in v:
-        s -= 15
+    if "high" in val:
+        score -= 50
+    elif "medium" in val:
+        score -= 25
 
-    return max(s, 0)
+    if "missing" in val:
+        score -= 15
+
+    return max(score, 0)
 
 # ==============================
-# BOTÓN
+# GENERACIÓN
 # ==============================
 if st.button("🚀 Generar MT700"):
 
@@ -229,39 +247,39 @@ if st.button("🚀 Generar MT700"):
         full_text = ""
 
         for f in files:
-            t = extract_text(f)
-            full_text += t + "\n\n"
+            extracted = extract_text(f)
+            full_text += extracted + "\n\n"
 
-        # limpiar
+        # ✅ limpieza final
         full_text = re.sub(r"\s+", " ", full_text)
         full_text = full_text[:12000]
 
-        st.subheader("📄 Texto extraído")
+        st.subheader("📄 Texto limpio")
         st.text_area("Preview", full_text[:1500], height=200)
 
         if len(full_text.strip()) < 50:
             st.error("❌ No se pudo extraer texto")
             st.stop()
 
-        # STEP 1
+        # STEP 1 JSON
         json_data = call_llm(EXTRACT_PROMPT, full_text)
 
         st.subheader("📊 JSON")
         st.text_area("Datos", json_data, height=200)
 
-        # STEP 2
+        # STEP 2 MT700
         mt700 = call_llm(GEN_PROMPT, json_data)
 
-        # STEP 3
+        # STEP 3 VALIDACIÓN
         validation = call_llm(VAL_PROMPT, mt700)
 
-        sc = score(validation)
+        score = calculate_score(validation)
 
         st.session_state["mt700"] = mt700
         st.session_state["validation"] = validation
-        st.session_state["score"] = sc
+        st.session_state["score"] = score
 
-        st.success("✅ Generado")
+        st.success("✅ MT700 generado")
 
 # ==============================
 # RESULTADO
@@ -271,7 +289,7 @@ if "mt700" in st.session_state:
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        mt = st.text_area("MT700", st.session_state["mt700"], height=400)
+        mt = st.text_area("📡 MT700", st.session_state["mt700"], height=400)
 
     with col2:
         st.metric("Confianza", f"{st.session_state['score']}%")
@@ -283,6 +301,6 @@ if "mt700" in st.session_state:
         else:
             st.error("❌ Alto riesgo")
 
-        st.text_area("Validación", st.session_state["validation"], height=200)
+        st.text_area("🔍 Validación", st.session_state["validation"], height=200)
 
-    st.download_button("⬇️ Descargar", mt, "MT700.txt")
+    st.download_button("⬇️ Descargar MT700", mt, "MT700.txt")
