@@ -30,15 +30,16 @@ NEVER return empty.
 VAL_PROMPT = "Check if MT700 has fields. Return OK or ERROR."
 
 
-def call_llm(prompt, text):
+
+ef call_llm(prompt, text):
     try:
         response = client.chat.completions.create(
-            model="llama3-70b-8192",
+            model="mixtral-8x7b-32768",   # ✅ CAMBIO AQUÍ
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": text}
             ],
-            max_tokens=800  # ✅ MUY IMPORTANTE
+            max_tokens=800
         )
 
         content = response.choices[0].message.content
@@ -50,6 +51,7 @@ def call_llm(prompt, text):
 
     except Exception as e:
         return f"Error: {str(e)}"
+
 
 
 # ✅ BOTÓN
