@@ -1,6 +1,6 @@
+client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 import streamlit as st
-import requests
-
+from groq import Groq
 st.title("MT700 Generator")
 
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
@@ -10,24 +10,16 @@ VAL_PROMPT = "Valida el MT700 detectando errores y di OK o ERROR"
 
 
 def call_llm(prompt, text):
-    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
-
     try:
-        response = requests.post(
-            API_URL,
-            json={"inputs": prompt + "\n\n" + text},
-            timeout=30
+        response = client.chat.completions.create(
+            model="llama3-70b-8192",
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": text}
+            ]
         )
 
-        if response.status_code != 200:
-            return f"Error API: {response.status_code} - {response.text}"
-
-        result = response.json()
-
-        if isinstance(result, list):
-            return result[0].get("generated_text", "Sin respuesta")
-        else:
-            return str(result)
+        return response.choices[0].message.content
 
     except Exception as e:
         return f"Error: {str(e)}"
