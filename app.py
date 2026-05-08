@@ -34,7 +34,7 @@ VAL_PROMPT = "Check if MT700 has fields. Return OK or ERROR."
 def call_llm(prompt, text):
     try:
         response = client.chat.completions.create(
-            model="mixtral-8x7b-32768",   # ✅ CAMBIO AQUÍ
+            model="llama-3.1-8b-instant",   # ✅ MODELO ACTUAL
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": text}
