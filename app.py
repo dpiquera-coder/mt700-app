@@ -7,88 +7,85 @@ from groq import Groq
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 st.set_page_config(page_title="MT700 Generator", layout="wide")
-st.title("📡 MT700 Generator - Trade Finance")
+st.title("📡 MT700 Generator - Trade Finance (No Hallucinations Mode)")
 
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 
 # ==============================
-# PROMPTS NIVEL BANCO
+# PROMPT ANTI-ALUCINACIÓN
 # ==============================
 GEN_PROMPT = """
-You are a senior Trade Finance officer.
+You are a Trade Finance officer.
 
-Generate a COMPLETE SWIFT MT700.
+Generate a SWIFT MT700 STRICTLY using ONLY the information present in the input text.
 
-STRICT FORMAT:
+--------------------------------
+CRITICAL RULES
+--------------------------------
+- DO NOT INVENT DATA
+- DO NOT GUESS
+- DO NOT ASSUME
+- If data is missing → write: NOT PROVIDED
+- NEVER create fake names, addresses, banks or amounts
 
-{1:F01BANKXXXX0000000000}
-{2:I700BANKXXXXN}
+--------------------------------
+FORMAT
+--------------------------------
 {4:
-:27:1/1
-:20:REFERENCE
+:20:
 :40A:IRREVOCABLE
-:31C:DATE
-:31D:DATE PLACE
-
-:50:APPLICANT
-:59:BENEFICIARY
-
-:32B:USD AMOUNT
-
-:41A:BANK
-BY PAYMENT
+:31C:
+:31D:
+:50:
+:59:
+:32B:
+:41A:
 :42C:AT SIGHT
-
-:43P:ALLOWED
-:43T:ALLOWED
-
-:44E:PORT OF LOADING
-:44F:PORT OF DESTINATION
-:44C:DATE
-
-:45A:GOODS DESCRIPTION + INCOTERM + HS CODE
-
-:46A:DOCUMENTS REQUIRED
-
-:47A:CONDITIONS
-
-:48:21 DAYS AFTER SHIPMENT
-
-:49:WITHOUT
-
-:57A:ADVISING BANK
-
-:71D:ALL CHARGES FOR BENEFICIARY
-
-:78:REIMBURSEMENT INSTRUCTIONS
-
-:72Z:WITHOUT CONFIRMATION
+:43P:
+:43T:
+:44E:
+:44F:
+:44C:
+:45A:
+:46A:
+:47A:
+:48:
+:49:
+:57A:
+:71D:
+:78:
+:72Z:
 -}
 
-RULES:
-- NEVER return empty
-- If missing data → infer realistic banking data
-- Keep internal consistency
+--------------------------------
+OBJECTIVE
+--------------------------------
+Be accurate, not complete.
+Better empty than wrong.
+
+OUTPUT ONLY MT700.
 """
 
+# ==============================
+# VALIDACIÓN INTELIGENTE
+# ==============================
 VAL_PROMPT = """
-You are a Trade Finance validator.
+You are a Trade Finance auditor.
 
-Check MT700:
+Check the MT700.
 
-Rules:
-- Must include fields :20, :32B, :50, :59, :45A
-- Must follow SWIFT structure
-- Must be consistent
+Tasks:
+1. Detect missing fields
+2. Detect inconsistencies
+3. Detect invented/suspicious data
 
 Return:
 
-OK
+RISK LEVEL:
+LOW / MEDIUM / HIGH
 
-or
-
-ERROR:
-- list issues
+ISSUES:
+- list problems
 """
 
 # ==============================
@@ -117,40 +114,34 @@ def call_llm(prompt, text):
 
 
 # ==============================
-# SCORING
+# SCORING REALISTA
 # ==============================
 def calculate_score(mt700, validation):
 
     score = 100
+    val = validation.lower()
 
-    text = (mt700 + validation).lower()
+    if "high" in val:
+        score -= 50
+    elif "medium" in val:
+        score -= 25
 
-    if "error" in text:
-        score -= 40
-
-    if "missing" in text:
+    if "missing" in val:
         score -= 20
 
-    if ":20" not in mt700:
-        score -= 15
-    if ":32b" not in mt700.lower():
-        score -= 15
-    if ":50" not in mt700:
-        score -= 10
-    if ":59" not in mt700:
-        score -= 10
+    if "invented" in val or "suspicious" in val:
+        score -= 40
 
     return max(score, 0)
 
 
 # ==============================
-# BOTÓN GENERAR
+# GENERACIÓN
 # ==============================
 if st.button("🚀 Generar MT700"):
 
     if not files:
         st.warning("Sube documentos")
-
     else:
         text = ""
 
@@ -158,20 +149,23 @@ if st.button("🚀 Generar MT700"):
             try:
                 content = f.read().decode("utf-8", errors="ignore")
 
-                # limpiar caracteres
+                # limpiar caracteres basura
                 content = "".join(c for c in content if c.isprintable())
 
+                # limitar tamaño
                 content = content[:4000]
 
                 text += content + "\n\n"
 
-            except Exception as e:
-                st.warning(f"Error leyendo {f.name}")
+            except:
+                st.warning(f"No se pudo leer {f.name}")
 
         st.write("📄 DEBUG TEXTO:", text[:500])
 
-        # GENERAR
+        # GENERAR MT700
         mt700 = call_llm(GEN_PROMPT, text)
+
+        # VALIDAR
         validation = call_llm(VAL_PROMPT, mt700)
 
         st.write("🔍 DEBUG MT700:", mt700[:500])
@@ -182,11 +176,11 @@ if st.button("🚀 Generar MT700"):
         st.session_state["validation"] = validation
         st.session_state["score"] = score
 
-        st.success("✅ Generado")
+        st.success("✅ MT700 generado")
 
 
 # ==============================
-# RESULTADOS
+# RESULTADO
 # ==============================
 if "mt700" in st.session_state:
 
@@ -195,21 +189,21 @@ if "mt700" in st.session_state:
     with col1:
         edited_mt700 = st.text_area(
             "📡 MT700",
-            st.session_state["mt700"],
+            value=st.session_state["mt700"],
             height=400
         )
 
     with col2:
-        st.metric("Confianza", str(st.session_state["score"]) + "%")
+        st.metric("Confianza", f"{st.session_state['score']}%")
 
         if st.session_state["score"] >= 90:
-            st.success("✅ Alto nivel")
+            st.success("✅ Bajo riesgo")
         elif st.session_state["score"] >= 70:
-            st.warning("⚠️ Revisar")
+            st.warning("⚠️ Riesgo medio")
         else:
-            st.error("❌ No emitir")
+            st.error("❌ Alto riesgo (NO EMITIR)")
 
-        st.text_area("Validación", st.session_state["validation"], height=200)
+        st.text_area("🔍 Validación", st.session_state["validation"], height=200)
 
     st.divider()
 
