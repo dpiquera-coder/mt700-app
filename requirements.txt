@@ -1,8 +1,6 @@
 streamlit
-openai
-requests
 groq
 pdfplumber
 python-docx
-pytesseract
-Pillow
+requests
+pillow
