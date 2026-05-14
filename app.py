@@ -105,7 +105,6 @@ textarea, .stTextArea textarea {{
 st.markdown("""
 <div class="mt700-hero">
   <p class="mt700-title">MT700 Generator</p>
-  <p class="mt700-subtitle">OCR MT700 + narrativa + auditoría explicativa + enfoque raw-first selectivo</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -1471,7 +1470,7 @@ if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
 
 st.markdown(
-    '<p class="small-note">Versión v6.9: raw-first selectivo para fields documentales/narrativos, preservando validación estricta en códigos SWIFT.</p>',
+    '<p class="small-note">Versión v6.9</p>',
     unsafe_allow_html=True
 )
 
