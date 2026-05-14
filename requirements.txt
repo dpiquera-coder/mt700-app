@@ -1,7 +1,6 @@
 streamlit
 groq
-pdfplumber
-python-docx
-requests
-pillow
 pymupdf
+python-docx
+pillow
+pytesseract
