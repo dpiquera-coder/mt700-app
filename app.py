@@ -32,7 +32,7 @@ except Exception:
 
 
 st.set_page_config(
-    page_title="MT700 Generator Anti-Hallucination v6.9",
+    page_title="MT700 Generator Anti-Hallucination v6.9.1",
     layout="wide",
     page_icon="🏦"
 )
@@ -106,7 +106,7 @@ textarea, .stTextArea textarea {{
 st.markdown("""
 <div class="mt700-hero">
   <p class="mt700-title">MT700 Generator</p>
-  <p class="mt700-subtitle">OCR MT700 + narrativa + auditoría explicativa + interpretación reforzada de checkboxes</p>
+  <p class="mt700-subtitle">OCR MT700 + narrativa + auditoría explicativa + validación reforzada + debug por campo</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -213,6 +213,11 @@ EXAMPLE_LIKE_VALUES = {
 
 BANK_HINT_WORDS = {
     "BANK", "BRANCH", "SWIFT", "BIC", "ACCOUNT", "ACCNO", "A/C", "CONSTRUCTION BANK", "SANTANDER"
+}
+
+BAD_PLACE_WORDS = {
+    "EXTRANJERO", "DEPARTAMENTO", "DEPARTAMENTO EXTRANJERO", "ORDENANTE",
+    "BENEFICIARIO", "BANCO", "BANK", "SWIFT", "ACC", "ACCOUNT", "A/C"
 }
 
 SPANISH_TO_ENGLISH_REPLACEMENTS = {
@@ -340,6 +345,15 @@ ORIGIN_OPERATIONAL_DEFAULT = "OPERATIONAL_DEFAULT"
 ORIGIN_DIRECT_OCR_MT700 = "DIRECT_OCR_MT700"
 ORIGIN_CHECKBOX_INFERRED = "CHECKBOX_INFERRED"
 
+FIELD_DEBUG = {}
+
+
+def add_field_debug(field_key, stage, details):
+    FIELD_DEBUG.setdefault(field_key, []).append({
+        "stage": stage,
+        "details": details
+    })
+
 
 def tesseract_available():
     return shutil.which("tesseract") is not None and pytesseract is not None and Image is not None
@@ -402,6 +416,16 @@ def normalize_checkbox_line(text):
     return normalize_ocr_separators(text)
 
 
+def normalize_checkbox_text(text):
+    t = to_upper(text)
+    t = t.replace("☒", " X ").replace("☑", " X ").replace("[X]", " X ").replace("(X)", " X ")
+    t = re.sub(r"[|]+", " ", t)
+    t = re.sub(r"\s*:\s*", " : ", t)
+    t = re.sub(r"\s*-\s*", " - ", t)
+    t = re.sub(r"\s{2,}", " ", t)
+    return t.strip()
+
+
 def collect_lines(text):
     return [normalize_checkbox_line(ln) for ln in text.splitlines() if ln.strip()]
 
@@ -441,22 +465,12 @@ def nearest_marked_option(line, labels):
     return best_label if best_dist <= 24 else ""
 
 
-def normalize_checkbox_text(text):
-    t = to_upper(text)
-    t = t.replace("☒", " X ").replace("☑", " X ").replace("[X]", " X ").replace("(X)", " X ")
-    t = re.sub(r"[|]+", " ", t)
-    t = re.sub(r"\s*:\s*", " : ", t)
-    t = re.sub(r"\s*-\s*", " - ", t)
-    t = re.sub(r"\s{2,}", " ", t)
-    return t.strip()
-
-
 def extract_context_window(text, anchor_pattern, window=220):
     t = normalize_checkbox_text(text)
     m = re.search(anchor_pattern, t, re.I)
     if not m:
         return ""
-    start = max(0, m.start() - 30)
+    start = max(0, m.start() - 40)
     end = min(len(t), m.end() + window)
     return t[start:end]
 
@@ -657,6 +671,40 @@ def valid_yymmdd(value):
         return False
 
 
+def looks_like_bad_reference_20(v):
+    if not v:
+        return True
+    if len(v) < 4:
+        return True
+    if v in {"ASO", "N/A", "NA", "XXX", "TEST"}:
+        return True
+    if re.fullmatch(r"[A-Z]{1,3}", v):
+        return True
+    return False
+
+
+def clean_place_candidate(value):
+    v = clean_value(value)
+    v = v.split("\n")[0]
+    v = re.split(r"\b(NO M[ÁA]S TARDE DEL|LATEST DATE OF SHIPMENT|DIVISA E IMPORTE|CREDITO UTILIZABLE|CR[EÉ]DITO UTILIZABLE)\b", v)[0]
+    v = re.sub(r"\b(TEL|TLF|ACC|ACCOUNT|SWIFT)\b.*$", "", v).strip(" ,.-")
+    v = re.sub(r"\s{2,}", " ", v)
+    return v
+
+
+def looks_like_bad_place(value):
+    v = normalized_for_match(value)
+    if not v:
+        return True
+    if len(v) < 4:
+        return True
+    if any(bad in v for bad in BAD_PLACE_WORDS):
+        return True
+    if re.fullmatch(r"[A-Z ]{1,12}", v) and "PORT" not in v and "BARCELONA" not in v and "CHINA" not in v and "SPAIN" not in v:
+        return True
+    return False
+
+
 def semantic_field_check(field_key, value):
     v = to_upper(value)
 
@@ -665,6 +713,8 @@ def semantic_field_check(field_key, value):
             return False, "20 exceeds 16 characters"
         if v.startswith("/") or v.endswith("/") or "//" in v:
             return False, "20 cannot start/end with slash or contain double slash"
+        if looks_like_bad_reference_20(v):
+            return False, "20 looks like truncated or low-quality reference"
 
     elif field_key == "field_31C":
         if not valid_yymmdd(v):
@@ -676,6 +726,9 @@ def semantic_field_check(field_key, value):
             return False, "31D must be YYMMDD plus place"
         if not valid_yymmdd(m.group(1)):
             return False, "31D date invalid"
+        place = clean_place_candidate(m.group(2))
+        if looks_like_bad_place(place):
+            return False, "31D place looks invalid"
 
     elif field_key == "field_32B":
         if not re.fullmatch(r"[A-Z]{3}[0-9][0-9,\.]*", v.replace(" ", "")):
@@ -699,6 +752,8 @@ def semantic_field_check(field_key, value):
         ok_code = any(code in v for code in VALID_41A_CODES)
         if not ok_code:
             return False, "41A invalid availability code"
+        if not re.search(r"\b[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?\b", v):
+            return False, "41A missing valid BIC"
 
     elif field_key in {"field_43P", "field_43T"}:
         if v not in VALID_43_CODES:
@@ -721,6 +776,14 @@ def semantic_field_check(field_key, value):
     elif field_key == "field_59":
         if looks_like_bank_text(v):
             return False, "59 should be beneficiary, not bank field"
+
+    elif field_key == "field_44E":
+        if looks_like_bad_place(v):
+            return False, "44E place looks invalid"
+
+    elif field_key == "field_44F":
+        if looks_like_bad_place(v):
+            return False, "44F place looks invalid"
 
     return True, ""
 
@@ -808,8 +871,9 @@ def merge_direct_ocr_into_extraction(extracted, source_text):
         if not key:
             continue
 
-        ok, _ = semantic_field_check(key, value)
+        ok, msg = semantic_field_check(key, value)
         if not ok and key not in NARRATIVE_FIELDS and key not in PARTY_FIELDS:
+            add_field_debug(key, "merge_direct_ocr_rejected", {"tag": tag, "value": value, "reason": msg})
             continue
 
         extracted[key] = {
@@ -819,31 +883,35 @@ def merge_direct_ocr_into_extraction(extracted, source_text):
             "confidence": 98,
             "origin": ORIGIN_DIRECT_OCR_MT700
         }
+        add_field_debug(key, "merge_direct_ocr_accepted", {"tag": tag, "value": value})
     return extracted, direct
+
+
+def infer_bic_from_text(source_text):
+    t = to_upper(source_text)
+    matches = []
+    for m in re.finditer(r"\b([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b", t):
+        bic = m.group(1)
+        if len(bic) in (8, 11):
+            matches.append(bic)
+
+    preferred = [b for b in matches if not b.startswith(("BSCH", "SANTAN"))]
+    if preferred:
+        return preferred[0]
+    return matches[0] if matches else ""
 
 
 def infer_payment_method_from_checkboxes(source_text):
     windows = [
-        extract_context_window(
-            source_text,
-            r"CR[EÉ]DITO UTILIZABLE EN LAS CAJAS DE.*?PARA",
-            window=180
-        ),
-        extract_context_window(
-            source_text,
-            r"PARA\s+X\s+PAGO",
-            window=120
-        ),
-        extract_context_window(
-            source_text,
-            r"PAGO\s+ACEPTACION\s+NEGOCIACION\s+PAGO DIFERIDO",
-            window=120
-        ),
+        extract_context_window(source_text, r"CR[EÉ]DITO UTILIZABLE EN LAS CAJAS DE", window=180),
+        extract_context_window(source_text, r"PARA\s+\[?X\]?\s*PAGO", window=120),
+        extract_context_window(source_text, r"PAGO\s+ACEPTACION\s+NEGOCIACION\s+PAGO DIFERIDO", window=140),
     ]
 
     for window in windows:
         if not window:
             continue
+        add_field_debug("field_41A", "checkbox_window", {"window": window})
 
         if re.search(r"\bPARA\s+X\s+PAGO\b", normalize_checkbox_text(window)):
             return "BY PAYMENT"
@@ -868,36 +936,24 @@ def infer_payment_method_from_checkboxes(source_text):
 
 def infer_tolerance_from_checkboxes(source_text):
     windows = [
-        extract_context_window(
-            source_text,
-            r"TOTAL QUANTITY AND AMOUNT IS ACCEPTABLE",
-            window=120
-        ),
-        extract_context_window(
-            source_text,
-            r"\b10\b.{0,40}TOTAL QUANTITY AND AMOUNT IS ACCEPTABLE",
-            window=80
-        ),
-        extract_context_window(
-            source_text,
-            r"\b5\b.{0,40}TOTAL QUANTITY AND AMOUNT IS ACCEPTABLE",
-            window=80
-        ),
+        extract_context_window(source_text, r"TOTAL QUANTITY AND AMOUNT IS ACCEPTABLE", window=140),
+        extract_context_window(source_text, r"\+/-\s*10%", window=100),
+        extract_context_window(source_text, r"\+/-\s*5%", window=100),
     ]
 
     for window in windows:
         if not window:
             continue
-
+        add_field_debug("field_39A", "checkbox_window", {"window": window})
         w = normalize_checkbox_text(window)
 
-        if re.search(r"\bX\s*-\s*10\b.{0,40}\bTOTAL QUANTITY AND AMOUNT IS ACCEPTABLE\b", w):
+        if re.search(r"\bX\b.{0,25}\b10%\b", w) or re.search(r"\b10%\b.{0,25}\bX\b", w):
             return "10/10"
-        if re.search(r"\b10\b.{0,12}\bX\b.{0,40}\bTOTAL QUANTITY AND AMOUNT IS ACCEPTABLE\b", w):
-            return "10/10"
-        if re.search(r"\bX\s*-\s*5\b.{0,40}\bTOTAL QUANTITY AND AMOUNT IS ACCEPTABLE\b", w):
+        if re.search(r"\bX\b.{0,25}\b5%\b", w) or re.search(r"\b5%\b.{0,25}\bX\b", w):
             return "5/5"
-        if re.search(r"\b5\b.{0,12}\bX\b.{0,40}\bTOTAL QUANTITY AND AMOUNT IS ACCEPTABLE\b", w):
+        if "10%" in w and "ACCEPTABLE" in w:
+            return "10/10"
+        if "5%" in w and "ACCEPTABLE" in w:
             return "5/5"
 
     return ""
@@ -906,18 +962,16 @@ def infer_tolerance_from_checkboxes(source_text):
 def infer_checkbox_selection_for_43p(text):
     t = normalize_checkbox_text(text)
 
-    if re.search(r"\bEXPEDICIONES PARCIALES\s+X\s+AUTORIZADAS\b", t):
+    if re.search(r"\bEXPEDICIONES PARCIALES\s*:\s*X\s+AUTORIZADAS\b", t):
         return "ALLOWED"
-    if re.search(r"\bEXPEDICIONES PARCIALES\s+X\s+PROHIBIDAS\b", t):
+    if re.search(r"\bEXPEDICIONES PARCIALES\s*:\s*X\s+PROHIBIDAS\b", t):
         return "NOT ALLOWED"
 
-    window = extract_context_window(
-        text,
-        r"EXPEDICIONES PARCIALES",
-        window=100
-    )
+    window = extract_context_window(text, r"EXPEDICIONES PARCIALES", window=100)
     if not window:
         return ""
+
+    add_field_debug("field_43P", "checkbox_window", {"window": window})
 
     chosen = nearest_marked_option_in_window(
         window,
@@ -936,6 +990,16 @@ def infer_checkbox_selection_for_43p(text):
 
 
 def infer_checkbox_selection_for_43t(text):
+    window = extract_context_window(text, r"TRANSBORDOS|TRANSHIPMENT|TRANSHIPMENTS", window=90)
+    if window:
+        add_field_debug("field_43T", "checkbox_window", {"window": window})
+
+    t = normalize_checkbox_text(text)
+    if re.search(r"\bTRANSBORDOS\s*:\s*PERMITIDOS\b", t):
+        return "ALLOWED"
+    if re.search(r"\bTRANSBORDOS\s*:\s*PROHIBIDOS\b", t):
+        return "NOT ALLOWED"
+
     lines = collect_lines(text)
     for line in lines:
         if "TRANSBORDOS" not in line and "TRANSHIPMENT" not in line and "TRANSHIPMENTS" not in line:
@@ -968,6 +1032,10 @@ def infer_checked_documents_for_46A(source_text):
         (r"\bX\s+CIM\b", "RAIL WAYBILL (CIM)")
     ]
 
+    doc_window = extract_context_window(source_text, r"CONTRA LA PRESENTACI[ÓO]N DE LOS SIGUIENTES DOCUMENTOS", window=1000)
+    if doc_window:
+        add_field_debug("field_46A", "documents_window", {"window": doc_window})
+
     for pattern, value in patterns:
         if re.search(pattern, t):
             docs.append(value)
@@ -989,13 +1057,11 @@ def infer_field_71D_from_checkboxes(source_text):
     if re.search(r"\bPOR CUENTA DE\s+X\s+ORDENANTE\b", t):
         return "ALL BANKING CHARGES OUTSIDE SPAIN ARE FOR APPLICANT'S ACCOUNT"
 
-    window = extract_context_window(
-        source_text,
-        r"(POR CUENTA DE|GASTOS BANCARIOS FUERA DE ESPAÑA)",
-        window=100
-    )
+    window = extract_context_window(source_text, r"(POR CUENTA DE|GASTOS BANCARIOS FUERA DE ESPAÑA)", window=120)
     if not window:
         return ""
+
+    add_field_debug("field_71D", "checkbox_window", {"window": window})
 
     chosen = nearest_marked_option_in_window(
         window,
@@ -1027,10 +1093,13 @@ def infer_field_20_from_text(source_text):
         m = re.search(p, t)
         if not m:
             continue
-        candidate = re.sub(r"\s+", "", m.group(1)).strip()[:16]
-        ok, _ = semantic_field_check("field_20", candidate)
+        raw = m.group(1)
+        candidate = re.sub(r"\s+", "", raw).strip()[:16]
+        add_field_debug("field_20", "candidate", {"pattern": p, "raw": raw, "candidate": candidate})
+        ok, msg = semantic_field_check("field_20", candidate)
         if ok:
             return candidate
+        add_field_debug("field_20", "candidate_rejected", {"candidate": candidate, "reason": msg})
     return ""
 
 
@@ -1045,6 +1114,7 @@ def infer_expiry_date_from_text(source_text):
         m = re.search(p, t)
         if m:
             yymmdd = normalize_to_yymmdd(m.group(1))
+            add_field_debug("field_31D", "date_candidate", {"pattern": p, "raw": m.group(1), "normalized": yymmdd})
             if yymmdd:
                 return yymmdd
     return ""
@@ -1054,22 +1124,22 @@ def infer_expiry_place_from_text(source_text):
     t = to_upper(source_text)
     patterns = [
         r"\b31D\s*[: ]\s*[0-9]{6}\s*([A-Z][A-Z ,\-.]{2,40})",
-        r"LUGAR Y FECHA DE VENCIMIENTO\s*[0-9]{6,8}\s*[-,:]?\s*([A-Z][A-Z ,\-.]{2,40})",
-        r"EXPIRY(?: PLACE)?(?: AND DATE)?\s*[0-9]{6,8}\s*[-,:]?\s*([A-Z][A-Z ,\-.]{2,40})"
+        r"LUGAR Y FECHA DE VENCIMIENTO\s*[:\-]?\s*[0-9]{6,8}\s*[-,:]?\s*([A-Z][A-Z ,\-.]{2,40})",
+        r"EXPIRY(?: PLACE)?(?: AND DATE)?\s*[:\-]?\s*[0-9]{6,8}\s*[-,:]?\s*([A-Z][A-Z ,\-.]{2,40})"
     ]
     for p in patterns:
         m = re.search(p, t)
         if m:
-            place = re.sub(r"\s{2,}", " ", m.group(1)).strip(" ,.-")
-            if place:
+            place = clean_place_candidate(m.group(1))
+            add_field_debug("field_31D", "place_candidate", {"pattern": p, "raw": m.group(1), "cleaned": place})
+            if place and not looks_like_bad_place(place):
                 return place
 
-    if "HONG KONG" in t:
-        return "HONG KONG"
-    if "MADRID" in t:
-        return "MADRID"
-    if "BARCELONA" in t:
-        return "BARCELONA"
+    # fallback prudente: usar ciudades reales solo si aparecen como lugares plausibles
+    for city in ["BARCELONA", "HONG KONG", "MADRID", "GUANGZHOU", "ANY PORT CHINA"]:
+        if city in t and not looks_like_bad_place(city):
+            add_field_debug("field_31D", "place_fallback_city", {"city": city})
+            return city
 
     return ""
 
@@ -1079,7 +1149,8 @@ def infer_field_31D_from_text(source_text):
     place = infer_expiry_place_from_text(source_text)
     if yymmdd and place:
         candidate = f"{yymmdd}{place}"
-        ok, _ = semantic_field_check("field_31D", candidate)
+        ok, msg = semantic_field_check("field_31D", candidate)
+        add_field_debug("field_31D", "assembled_candidate", {"candidate": candidate, "ok": ok, "reason": msg})
         if ok:
             return candidate
     return ""
@@ -1091,8 +1162,7 @@ def infer_field_32B_from_text(source_text):
         r"\b32B\s*[: ]\s*([A-Z]{3})([0-9][0-9,\.]+)",
         r"DIVISA E IMPORTE\s*[:\-]?\s*([0-9][0-9\.,]+)\s*([A-Z]{3})",
         r"DIVISA E IMPORTE\s*[:\-]?\s*([A-Z]{3})\s*([0-9][0-9\.,]+)",
-        r"DIVISA\s*([A-Z]{3}).{0,20}?IMPORTE\s*([0-9][0-9\.,]+)",
-        r"IMPORTE\s*([0-9][0-9\.,]+).{0,20}?DIVISA\s*([A-Z]{3})"
+        r"TOTAL\s+AMOUNT.*?([0-9][0-9\.,]+)\b.{0,10}\bUSD\b",
     ]
     for p in anchored_patterns:
         m = re.search(p, t, re.S)
@@ -1101,12 +1171,16 @@ def infer_field_32B_from_text(source_text):
         g1, g2 = m.group(1), m.group(2)
         if re.fullmatch(r"[A-Z]{3}", g1):
             ccy, amt = g1, g2
-        else:
+        elif re.fullmatch(r"[A-Z]{3}", g2):
             amt, ccy = g1, g2
+        else:
+            amt, ccy = g1, "USD"
         candidate = f"{ccy}{normalize_amount_for_32B(amt)}"
-        ok, _ = semantic_field_check("field_32B", candidate)
+        add_field_debug("field_32B", "candidate", {"pattern": p, "candidate": candidate})
+        ok, msg = semantic_field_check("field_32B", candidate)
         if ok:
             return candidate
+        add_field_debug("field_32B", "candidate_rejected", {"candidate": candidate, "reason": msg})
     return ""
 
 
@@ -1114,37 +1188,28 @@ def infer_field_39A_from_text(source_text):
     t = to_upper(source_text)
     patterns = [
         r"\b39A\s*[: ]\s*(\d{1,2}/\d{1,2})",
-        r"TOLERANCE\s*[-:]?\s*(\d{1,2})\s*PCT",
-        r"ALLOWED TOLERANCE\s*[-:]?\s*(\d{1,2})\s*PCT"
+        r"\+/-\s*(\d{1,2})\s*%\s+IN TOTAL QUANTITY AND AMOUNT IS ACCEPTABLE",
+        r"TOTAL QUANTITY AND AMOUNT IS ACCEPTABLE"
     ]
     for p in patterns:
         m = re.search(p, t)
         if m:
-            if "/" in m.group(1):
+            if m.lastindex and m.group(1) and m.group(1).isdigit():
+                candidate = f"{m.group(1)}/{m.group(1)}"
+            elif m.lastindex and m.group(1) and "/" in m.group(1):
                 candidate = m.group(1)
             else:
-                candidate = f"{m.group(1)}/{m.group(1)}"
-            ok, _ = semantic_field_check("field_39A", candidate)
+                candidate = infer_tolerance_from_checkboxes(source_text)
+            add_field_debug("field_39A", "candidate", {"pattern": p, "candidate": candidate})
+            ok, msg = semantic_field_check("field_39A", candidate)
             if ok:
                 return candidate
 
     checkbox_candidate = infer_tolerance_from_checkboxes(source_text)
     if checkbox_candidate:
+        add_field_debug("field_39A", "checkbox_candidate", {"candidate": checkbox_candidate})
         return checkbox_candidate
 
-    return ""
-
-
-def infer_bic_from_text(source_text):
-    t = to_upper(source_text)
-    patterns = [
-        r"\b([A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?)\b"
-    ]
-    for p in patterns:
-        for m in re.finditer(p, t):
-            bic = m.group(1)
-            if len(bic) in (8, 11):
-                return bic
     return ""
 
 
@@ -1152,32 +1217,35 @@ def infer_field_41A_from_text(source_text):
     t = to_upper(source_text)
     patterns = [
         r"\b41A\s*[: ]\s*([A-Z0-9]{8,11})\s*(BY (?:ACCEPTANCE|DEF PAYMENT|MIXED PYMT|NEGOTIATION|PAYMENT))",
-        r"\b([A-Z0-9]{8,11})\s*(BY (?:ACCEPTANCE|DEF PAYMENT|MIXED PYMT|NEGOTIATION|PAYMENT))"
+        r"\b([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\s*(BY (?:ACCEPTANCE|DEF PAYMENT|MIXED PYMT|NEGOTIATION|PAYMENT))"
     ]
     for p in patterns:
         m = re.search(p, t)
         if m:
             candidate = f"{m.group(1)} {m.group(2)}"
-            ok, _ = semantic_field_check("field_41A", candidate)
+            add_field_debug("field_41A", "candidate", {"pattern": p, "candidate": candidate})
+            ok, msg = semantic_field_check("field_41A", candidate)
             if ok:
                 return candidate
+            add_field_debug("field_41A", "candidate_rejected", {"candidate": candidate, "reason": msg})
 
     checkbox_method = infer_payment_method_from_checkboxes(source_text)
-    if checkbox_method:
-        bic = infer_bic_from_text(source_text)
-        if bic:
-            candidate = f"{bic} {checkbox_method}"
-            ok, _ = semantic_field_check("field_41A", candidate)
-            if ok:
-                return candidate
+    bic = infer_bic_from_text(source_text)
+    add_field_debug("field_41A", "checkbox_method_bic", {"method": checkbox_method, "bic": bic})
 
-    if "A LA VISTA" in t or "AT SIGHT" in t:
-        bic = infer_bic_from_text(source_text)
-        if bic:
-            candidate = f"{bic} BY PAYMENT"
-            ok, _ = semantic_field_check("field_41A", candidate)
-            if ok:
-                return candidate
+    if checkbox_method and bic:
+        candidate = f"{bic} {checkbox_method}"
+        ok, msg = semantic_field_check("field_41A", candidate)
+        add_field_debug("field_41A", "assembled_candidate", {"candidate": candidate, "ok": ok, "reason": msg})
+        if ok:
+            return candidate
+
+    if ("A LA VISTA" in t or "AT SIGHT" in t) and bic:
+        candidate = f"{bic} BY PAYMENT"
+        ok, msg = semantic_field_check("field_41A", candidate)
+        add_field_debug("field_41A", "sight_fallback", {"candidate": candidate, "ok": ok, "reason": msg})
+        if ok:
+            return candidate
     return ""
 
 
@@ -1203,16 +1271,20 @@ def infer_field_43P_from_text(source_text):
 
     for p in allowed_patterns:
         if re.search(p, t):
+            add_field_debug("field_43P", "regex_match", {"pattern": p, "value": "ALLOWED"})
             return "ALLOWED"
     for p in not_allowed_patterns:
         if re.search(p, t):
+            add_field_debug("field_43P", "regex_match", {"pattern": p, "value": "NOT ALLOWED"})
             return "NOT ALLOWED"
     for p in conditional_patterns:
         if re.search(p, t):
+            add_field_debug("field_43P", "regex_match", {"pattern": p, "value": "CONDITIONAL"})
             return "CONDITIONAL"
 
     checkbox_value = infer_checkbox_selection_for_43p(t)
     if checkbox_value:
+        add_field_debug("field_43P", "checkbox_match", {"value": checkbox_value})
         return checkbox_value
 
     return ""
@@ -1240,16 +1312,20 @@ def infer_field_43T_from_text(source_text):
 
     for p in allowed_patterns:
         if re.search(p, t):
+            add_field_debug("field_43T", "regex_match", {"pattern": p, "value": "ALLOWED"})
             return "ALLOWED"
     for p in not_allowed_patterns:
         if re.search(p, t):
+            add_field_debug("field_43T", "regex_match", {"pattern": p, "value": "NOT ALLOWED"})
             return "NOT ALLOWED"
     for p in conditional_patterns:
         if re.search(p, t):
+            add_field_debug("field_43T", "regex_match", {"pattern": p, "value": "CONDITIONAL"})
             return "CONDITIONAL"
 
     checkbox_value = infer_checkbox_selection_for_43t(t)
     if checkbox_value:
+        add_field_debug("field_43T", "checkbox_match", {"value": checkbox_value})
         return checkbox_value
 
     return ""
@@ -1259,15 +1335,20 @@ def infer_field_44E_from_text(source_text):
     t = to_upper(source_text)
     patterns = [
         r"\b44E\s*[: ]\s*([A-Z].+)",
-        r"EMBARQUE DESDE\s*([A-Z][A-Z ,]+)",
-        r"FROM\s*([A-Z][A-Z ,]+)"
+        r"EMBARQUE\s*:\s*DESDE\s*([A-Z][A-Z0-9 ,\-\.]+)",
+        r"EMBARQUE DESDE\s*([A-Z][A-Z0-9 ,\-\.]+)",
+        r"FROM\s+([A-Z][A-Z0-9 ,\-\.]+)"
     ]
     for p in patterns:
         m = re.search(p, t)
         if m:
-            value = clean_value(m.group(1)).split("\n")[0][:80]
-            if value:
+            raw = m.group(1)
+            value = clean_place_candidate(raw)[:80]
+            add_field_debug("field_44E", "candidate", {"pattern": p, "raw": raw, "cleaned": value})
+            ok, msg = semantic_field_check("field_44E", value)
+            if ok:
                 return value
+            add_field_debug("field_44E", "candidate_rejected", {"candidate": value, "reason": msg})
     return ""
 
 
@@ -1275,15 +1356,20 @@ def infer_field_44F_from_text(source_text):
     t = to_upper(source_text)
     patterns = [
         r"\b44F\s*[: ]\s*([A-Z].+)",
-        r"CON DESTINO A\s*([A-Z][A-Z ,]+)",
-        r"TO\s*([A-Z][A-Z ,]+)"
+        r"CON DESTINO A\s*:\s*([A-Z][A-Z0-9 ,\-\.]+)",
+        r"CON DESTINO A\s*([A-Z][A-Z0-9 ,\-\.]+)",
+        r"TO\s+([A-Z][A-Z0-9 ,\-\.]+)"
     ]
     for p in patterns:
         m = re.search(p, t)
         if m:
-            value = clean_value(m.group(1)).split("\n")[0][:80]
-            if value:
+            raw = m.group(1)
+            value = clean_place_candidate(raw)[:80]
+            add_field_debug("field_44F", "candidate", {"pattern": p, "raw": raw, "cleaned": value})
+            ok, msg = semantic_field_check("field_44F", value)
+            if ok:
                 return value
+            add_field_debug("field_44F", "candidate_rejected", {"candidate": value, "reason": msg})
     return ""
 
 
@@ -1291,13 +1377,14 @@ def infer_field_44C_from_text(source_text):
     t = to_upper(source_text)
     patterns = [
         r"\b44C\s*[: ]\s*([0-9]{6})",
-        r"NO M[ÁA]S TARDE DEL\s*([0-9]{6,8})",
+        r"NO M[ÁA]S TARDE DEL\s*[:\-]?\s*([0-9]{6,8})",
         r"LATEST DATE OF SHIPMENT\s*[:\-]?\s*([0-9]{6,8})"
     ]
     for p in patterns:
         m = re.search(p, t)
         if m:
             value = normalize_to_yymmdd(m.group(1))
+            add_field_debug("field_44C", "candidate", {"pattern": p, "raw": m.group(1), "normalized": value})
             if value:
                 return value
     return ""
@@ -1308,6 +1395,32 @@ def infer_field_46A_from_checkboxes(source_text):
     if not docs:
         return ""
     return "\n".join(f"+ {d}" for d in docs)
+
+
+def rewrite_supported_narratives(verified_map):
+    payload = {}
+    for key in NARRATIVE_FIELDS:
+        item = verified_map.get(key, {})
+        if item.get("accepted") and item.get("value") and (item.get("evidence") or item.get("origin") in {ORIGIN_DIRECT_OCR_MT700, ORIGIN_CHECKBOX_INFERRED, ORIGIN_INFERRED, ORIGIN_SYSTEM_DEFAULT}):
+            payload[key] = {
+                "value": item["value"],
+                "evidence": item.get("evidence", item["value"])
+            }
+
+    if not payload:
+        return {}
+
+    user_text = json.dumps(payload, ensure_ascii=False, indent=2)
+    rewritten = call_llm_json(SYSTEM_NARRATIVE_REWRITE_PROMPT, user_text, max_tokens=1400)
+
+    out = {}
+    for key, original in payload.items():
+        candidate = rewritten.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            out[key] = clean_value(candidate)
+        else:
+            out[key] = original["value"]
+    return out
 
 
 def infer_mt700_defaults(source_text, verified_map):
@@ -1342,6 +1455,7 @@ def infer_mt700_defaults(source_text, verified_map):
                     "reason": f"Recovered from source text / checkbox logic for {field_key}",
                     "origin": ORIGIN_CHECKBOX_INFERRED if field_key in {"field_39A", "field_41A", "field_43P", "field_43T", "field_46A", "field_71D"} else ORIGIN_INFERRED
                 }
+                add_field_debug(field_key, "default_inference_selected", {"value": value})
 
     if not verified_map["field_40A"]["accepted"] and has_lc_context:
         inferred["field_40A"] = {
@@ -1368,6 +1482,7 @@ def infer_mt700_defaults(source_text, verified_map):
     if not verified_map["field_31C"]["accepted"]:
         date_candidates = [
             re.search(r"\b31C\s*[: ]\s*([0-9]{6})", t),
+            re.search(r"\bFIGUERAS A\s+([0-9]{2}/[0-9]{2}/[0-9]{4})", t),
             re.search(r"\bFECHA\s*([0-9]{6,8})", t),
         ]
         picked = ""
@@ -1434,6 +1549,7 @@ def apply_inferred_defaults(verified_map, inferred):
         ok, msg = semantic_field_check(key, value)
         if not ok and key not in {"field_46A", "field_71D"}:
             audit.append(f"{key}: inferred/default value rejected: {msg}")
+            add_field_debug(key, "apply_inferred_rejected", {"value": value, "reason": msg})
             continue
 
         verified_map[key] = {
@@ -1446,6 +1562,7 @@ def apply_inferred_defaults(verified_map, inferred):
             "origin": meta["origin"]
         }
         audit.append(f"{key}: accepted by {meta['origin']} -> {value}")
+        add_field_debug(key, "apply_inferred_accepted", {"value": value, "origin": meta["origin"]})
     return verified_map, audit
 
 
@@ -1506,38 +1623,18 @@ def verify_extraction(extracted, source_text):
             "origin": origin if accepted else ""
         }
         audit.append(f"{key}: {'ACCEPTED' if accepted else reason}")
+        add_field_debug(key, "verification", {
+            "accepted": accepted,
+            "value": value if accepted else "",
+            "reason": "Accepted" if accepted else reason,
+            "origin": origin if accepted else ""
+        })
 
     inferred = infer_mt700_defaults(source_text, verified)
     verified, infer_audit = apply_inferred_defaults(verified, inferred)
     audit.extend(infer_audit)
 
     return verified, audit
-
-
-def rewrite_supported_narratives(verified_map):
-    payload = {}
-    for key in NARRATIVE_FIELDS:
-        item = verified_map.get(key, {})
-        if item.get("accepted") and item.get("value") and (item.get("evidence") or item.get("origin") in {ORIGIN_DIRECT_OCR_MT700, ORIGIN_CHECKBOX_INFERRED, ORIGIN_INFERRED, ORIGIN_SYSTEM_DEFAULT}):
-            payload[key] = {
-                "value": item["value"],
-                "evidence": item.get("evidence", item["value"])
-            }
-
-    if not payload:
-        return {}
-
-    user_text = json.dumps(payload, ensure_ascii=False, indent=2)
-    rewritten = call_llm_json(SYSTEM_NARRATIVE_REWRITE_PROMPT, user_text, max_tokens=1400)
-
-    out = {}
-    for key, original in payload.items():
-        candidate = rewritten.get(key)
-        if isinstance(candidate, str) and candidate.strip():
-            out[key] = clean_value(candidate)
-        else:
-            out[key] = original["value"]
-    return out
 
 
 def build_mt700_from_verified_map(verified_map):
@@ -1641,7 +1738,7 @@ if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
 
 st.markdown(
-    '<p class="small-note">Versión v6.9: parser OCR-MT700, auditoría explicativa y checkbox parsing reforzado para 41A/39A/43P/43T/46A/71D.</p>',
+    '<p class="small-note">Versión v6.9.1: validación reforzada para 20/31D/44E/44F, inferencia mejorada para 39A/41A/43P/46A/71D y debug detallado por campo.</p>',
     unsafe_allow_html=True
 )
 
@@ -1650,6 +1747,8 @@ if st.button("🚀 Generar MT700"):
         st.warning("Sube documentos")
     else:
         try:
+            FIELD_DEBUG.clear()
+
             with st.spinner("Extrayendo texto de documentos..."):
                 full_parts = []
                 debug = []
@@ -1732,8 +1831,9 @@ if st.button("🚀 Generar MT700"):
             st.session_state["mt700"] = mt700
             st.session_state["validation"] = validation
             st.session_state["direct_ocr_map"] = direct_ocr_map
+            st.session_state["field_debug"] = FIELD_DEBUG
 
-            st.success("✅ Generado con parser OCR-MT700, control anti-alucinación y checkbox parsing reforzado")
+            st.success("✅ Generado con validación reforzada, control anti-alucinación y debug por campo")
 
         except Exception as e:
             st.error(f"Error durante la ejecución: {e}")
@@ -1744,6 +1844,9 @@ if "mt700" in st.session_state:
         st.json(st.session_state.get("direct_ocr_map", {}))
         st.json(st.session_state.get("verified_map", {}))
         st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:12000], height=320)
+
+    with st.expander("🧷 Debug por campo", expanded=False):
+        st.json(st.session_state.get("field_debug", {}))
 
     col1, col2 = st.columns([2, 1])
 
@@ -1763,7 +1866,8 @@ if "mt700" in st.session_state:
         "direct_ocr_map": st.session_state.get("direct_ocr_map", {}),
         "verified_map": st.session_state["verified_map"],
         "audit": st.session_state["audit"],
-        "validation": st.session_state["validation"]
+        "validation": st.session_state["validation"],
+        "field_debug": st.session_state.get("field_debug", {})
     }, ensure_ascii=False, indent=2).encode("utf-8")
 
     c1, c2 = st.columns(2)
@@ -1771,13 +1875,13 @@ if "mt700" in st.session_state:
         st.download_button(
             "⬇️ Descargar MT700 TXT",
             txt_data,
-            file_name="MT700_ANTI_HALLUCINATION_V69.txt",
+            file_name="MT700_ANTI_HALLUCINATION_V691.txt",
             mime="text/plain"
         )
     with c2:
         st.download_button(
             "⬇️ Descargar auditoría JSON",
             json_data,
-            file_name="MT700_AUDIT_V69.json",
+            file_name="MT700_AUDIT_V691.json",
             mime="application/json"
         )
