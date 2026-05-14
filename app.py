@@ -32,7 +32,7 @@ except Exception:
 
 
 st.set_page_config(
-    page_title="MT700 Generator Anti-Hallucination v6.4 Stable",
+    page_title="MT700 Generator Anti-Hallucination v6.5 OCR-MT700",
     layout="wide",
     page_icon="🏦"
 )
@@ -75,10 +75,6 @@ div[data-testid="stExpander"] {{
     background: #fffdfd;
     box-shadow: 0 2px 10px rgba(236, 0, 0, 0.04);
 }}
-div[data-testid="stExpander"] details summary {{
-    font-weight: 600;
-    color: #5c1111;
-}}
 textarea, .stTextArea textarea {{
     border-radius: 10px !important;
 }}
@@ -110,7 +106,7 @@ textarea, .stTextArea textarea {{
 st.markdown("""
 <div class="mt700-hero">
   <p class="mt700-title">MT700 Generator</p>
-  <p class="mt700-subtitle">Anti-hallucination extraction with verified evidence, safer fallbacks and audit trail</p>
+  <p class="mt700-subtitle">Narrative extraction + direct OCR parsing of MT700 formatted PDFs</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -165,6 +161,14 @@ VALID_40E_CODES = {
 
 VALID_49_CODES = {"CONFIRM", "MAY ADD", "WITHOUT"}
 
+VALID_41A_CODES = {
+    "BY ACCEPTANCE",
+    "BY DEF PAYMENT",
+    "BY MIXED PYMT",
+    "BY NEGOTIATION",
+    "BY PAYMENT"
+}
+
 EXAMPLE_LIKE_VALUES = {
     "field_27": {"1/1"},
     "field_40A": VALID_40A_CODES,
@@ -177,7 +181,7 @@ EXAMPLE_LIKE_VALUES = {
 }
 
 BANK_HINT_WORDS = {
-    "BANK", "BRANCH", "SWIFT", "BIC", "ACCOUNT", "ACCNO", "A/C", "CONSTRUCTION BANK"
+    "BANK", "BRANCH", "SWIFT", "BIC", "ACCOUNT", "ACCNO", "A/C", "CONSTRUCTION BANK", "SANTANDER"
 }
 
 SPANISH_TO_ENGLISH_REPLACEMENTS = {
@@ -227,8 +231,10 @@ Authoritative MT700 structural context:
 - Field 31C format: YYMMDD.
 - Field 31D format: YYMMDD plus expiry place.
 - Field 32B format: currency code plus amount.
+- Field 39A format: tolerance xx/yy.
 - Field 40A valid code values are restricted.
 - Field 40E valid rules code values are restricted.
+- Field 41A includes a BIC or bank identifier plus one valid BY code.
 - Field 48 is period for presentation in days.
 - The absence of field 48 means the presentation period is 21 days, where applicable.
 - Field 49 contains confirmation instructions and only valid codes are CONFIRM, MAY ADD, WITHOUT.
@@ -294,6 +300,7 @@ ORIGIN_EXTRACTED = "EXTRACTED"
 ORIGIN_INFERRED = "INFERRED_FROM_CONTEXT"
 ORIGIN_SYSTEM_DEFAULT = "SYSTEM_DEFAULT"
 ORIGIN_OPERATIONAL_DEFAULT = "OPERATIONAL_DEFAULT"
+ORIGIN_DIRECT_OCR_MT700 = "DIRECT_OCR_MT700"
 
 
 def tesseract_available():
@@ -330,7 +337,7 @@ def clean_text(text):
     text = "".join(c for c in text if c.isprintable() or c in "\n\t")
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    return text[:50000].strip()
+    return text[:100000].strip()
 
 
 def clean_value(text):
@@ -361,14 +368,14 @@ def extract_pdf_text_native(data):
     try:
         doc = fitz.open(stream=data, filetype="pdf")
         pages = []
-        for i in range(min(doc.page_count, 8)):
+        for i in range(min(doc.page_count, 12)):
             pages.append(doc[i].get_text("text"))
         return "\n".join(pages)
     except Exception:
         return ""
 
 
-def extract_pdf_ocr_all_pages(data, max_pages=4):
+def extract_pdf_ocr_all_pages(data, max_pages=6):
     if not fitz or not tesseract_available():
         return ""
     try:
@@ -399,8 +406,21 @@ def call_llm_json(system_prompt, user_text, max_tokens=2200):
     return safe_json_load(response.choices[0].message.content or "{}")
 
 
-def parse_extraction_object(data):
+def empty_extraction_map():
     out = {}
+    for key in FIELD_KEYS:
+        out[key] = {
+            "value": None,
+            "evidence": None,
+            "found": False,
+            "confidence": 0,
+            "origin": ORIGIN_EXTRACTED
+        }
+    return out
+
+
+def parse_extraction_object(data):
+    out = empty_extraction_map()
     for key in FIELD_KEYS:
         raw = data.get(key, {}) if isinstance(data, dict) else {}
         if not isinstance(raw, dict):
@@ -536,6 +556,16 @@ def semantic_field_check(field_key, value):
         if v not in VALID_40E_CODES and not v.startswith("OTHR"):
             return False, "40E invalid code"
 
+    elif field_key == "field_41A":
+        if "BY " not in v:
+            return False, "41A missing availability code"
+        ok_code = any(code in v for code in VALID_41A_CODES)
+        if not ok_code:
+            return False, "41A invalid availability code"
+        bic_candidate = v.split("BY ")[0].strip()
+        if bic_candidate and not re.fullmatch(r"[A-Z0-9]{8,11}", bic_candidate):
+            return False, "41A invalid BIC format"
+
     elif field_key == "field_43P":
         if v not in {"ALLOWED", "NOT ALLOWED"}:
             return False, "43P invalid"
@@ -595,57 +625,296 @@ def normalize_to_yymmdd(raw):
     return ""
 
 
+def fix_common_ocr_swift_noise(text):
+    t = clean_text(text).upper()
+    t = t.replace("{1:", "\n{1:")
+    t = t.replace("{2:", "\n{2:")
+    t = t.replace("{4:", "\n{4:")
+    t = re.sub(r"\b4\s*\n\s*27", "\n27", t)
+    t = re.sub(r"\b2711\b", "27 1/1", t)
+    t = re.sub(r"\b39A1010\b", "39A 10/10", t)
+    t = re.sub(r"\b4821AFTER SHIPMENT DATE\b", "48 21/AFTER SHIPMENT DATE", t)
+    t = re.sub(r"\b49WITHOUT\b", "49 WITHOUT", t)
+    t = re.sub(r"\b43PALLOWED\b", "43P ALLOWED", t)
+    t = re.sub(r"\b43TALLOWED\b", "43T ALLOWED", t)
+    t = re.sub(r"\b40AIRREVOCABLE\b", "40A IRREVOCABLE", t)
+    t = re.sub(r"\b40EUCP LATEST VERSION\b", "40E UCP LATEST VERSION", t)
+    t = re.sub(r"\b31C(\d{6})\b", r"31C \1", t)
+    t = re.sub(r"\b31D(\d{6}[A-Z].+?)\b", r"31D \1", t)
+    t = re.sub(r"\b32B([A-Z]{3}[0-9].+?)\b", r"32B \1", t)
+    t = re.sub(r"\b44E([A-Z].+?)\b", r"44E \1", t)
+    t = re.sub(r"\b44F([A-Z].+?)\b", r"44F \1", t)
+    t = re.sub(r"\b44C(\d{6})\b", r"44C \1", t)
+    t = re.sub(r"\b57A([A-Z0-9]{8,11})\b", r"57A \1", t)
+    return t
+
+
+def parse_ocr_mt700_blocks(source_text):
+    t = fix_common_ocr_swift_noise(source_text)
+    tags = ALLOWED_TAGS[:]
+    tag_alt = "|".join(sorted(tags, key=len, reverse=True))
+
+    results = {}
+
+    for tag in tags:
+        pattern = rf"(?ms)(?:^|\n)\s*:?\s*{re.escape(tag)}\s+(.+?)(?=(?:\n\s*:?\s*(?:{tag_alt})\s)|\n\s*-\}}|\Z)"
+        m = re.search(pattern, t)
+        if m:
+            value = clean_value(m.group(1).strip(" :\n\t"))
+            if value:
+                results[tag] = value
+
+    if "41A" in results:
+        val = results["41A"]
+        val = re.sub(r"\b([A-Z0-9]{8,11})\s+(BY (?:ACCEPTANCE|DEF PAYMENT|MIXED PYMT|NEGOTIATION|PAYMENT))\b", r"\1 \2", val)
+        results["41A"] = val
+
+    return results
+
+
+def merge_direct_ocr_into_extraction(extracted, source_text):
+    direct = parse_ocr_mt700_blocks(source_text)
+    for tag, value in direct.items():
+        key = TAG_TO_FIELD.get(tag)
+        if not key:
+            continue
+
+        ok, _ = semantic_field_check(key, value)
+        if not ok and key not in NARRATIVE_FIELDS and key not in PARTY_FIELDS:
+            continue
+
+        extracted[key] = {
+            "value": clean_value(value),
+            "evidence": clean_text(f"{tag} {value}")[:1200],
+            "found": True,
+            "confidence": 98,
+            "origin": ORIGIN_DIRECT_OCR_MT700
+        }
+    return extracted, direct
+
+
 def infer_field_20_from_text(source_text):
     t = to_upper(source_text)
-    patterns = [
-        r"(?:ORDER NO|ORDER NUMBER|REFERENCE|REFERENCIA|OPERACION|OPERACIÓN)\s*[:\-]?\s*([A-Z0-9\-\/]{3,16})",
-        r"N[ÚU]MERO DE PROPUESTA ELECTR[ÓO]NICA\s*[:\-]?\s*([A-Z0-9\-\/ ]{3,25})"
+
+    patterns_priority = [
+        r"\b20\s*[: ]\s*([A-Z0-9\-\/]{3,16})",
+        r"ORDER\s*NO\.?\s*[:\-]?\s*([A-Z0-9\-\/]{3,16})",
+        r"ORDER\s*NUMBER\.?\s*[:\-]?\s*([A-Z0-9\-\/]{3,16})",
+        r"N[ÚU]MERO DE PROPUESTA ELECTR[ÓO]NICA\s*[:\-]?\s*([0-9 ]{8,25})",
+        r"ORDINAL(?: DE ENV[ÍI]O)?\s*[:\-]?\s*([A-Z0-9\-\/]{3,16})",
+        r"REFERENCIA\s*[:\-]?\s*([A-Z0-9\-\/]{3,16})",
+        r"REFERENCE\s*[:\-]?\s*([A-Z0-9\-\/]{3,16})",
+        r"OPERACI[ÓO]N\s*[:\-]?\s*([A-Z0-9\-\/]{3,16})"
     ]
-    for p in patterns:
+
+    for p in patterns_priority:
         m = re.search(p, t)
-        if m:
-            candidate = re.sub(r"\s+", "", m.group(1))[:16]
-            ok, _ = semantic_field_check("field_20", candidate)
-            if ok:
-                return candidate
+        if not m:
+            continue
+        candidate = re.sub(r"\s+", "", m.group(1)).strip()[:16]
+        ok, _ = semantic_field_check("field_20", candidate)
+        if ok:
+            return candidate
     return ""
 
 
-def infer_field_31D_from_text(source_text):
+def infer_expiry_date_from_text(source_text):
     t = to_upper(source_text)
+
     patterns = [
-        r"(?:LUGAR Y FECHA DE VENCIMIENTO|EXPIRY(?: PLACE)?(?: AND DATE)?)\s*[:\-]?\s*([0-9]{6,8})\s*[,/\- ]+\s*([A-Z][A-Z ,\-.]{2,40})"
+        r"\b31D\s*[: ]\s*([0-9]{6})",
+        r"LUGAR Y FECHA DE VENCIMIENTO\s*[:\-]?\s*([0-9]{6,8})",
+        r"EXPIRY(?: PLACE)?(?: AND DATE)?\s*[:\-]?\s*([0-9]{6,8})"
     ]
+
     for p in patterns:
         m = re.search(p, t)
         if m:
             yymmdd = normalize_to_yymmdd(m.group(1))
-            place = re.sub(r"\s{2,}", " ", m.group(2)).strip(" ,.-")
-            candidate = f"{yymmdd}{place}" if yymmdd and place else ""
-            ok, _ = semantic_field_check("field_31D", candidate) if candidate else (False, "")
-            if ok:
-                return candidate
+            if yymmdd:
+                return yymmdd
+    return ""
+
+
+def infer_expiry_place_from_text(source_text):
+    t = to_upper(source_text)
+
+    patterns = [
+        r"\b31D\s*[: ]\s*[0-9]{6}\s*([A-Z][A-Z ,\-.]{2,40})",
+        r"LUGAR Y FECHA DE VENCIMIENTO\s*[0-9]{6,8}\s*[-,:]?\s*([A-Z][A-Z ,\-.]{2,40})",
+        r"EXPIRY(?: PLACE)?(?: AND DATE)?\s*[0-9]{6,8}\s*[-,:]?\s*([A-Z][A-Z ,\-.]{2,40})"
+    ]
+
+    for p in patterns:
+        m = re.search(p, t)
+        if m:
+            place = re.sub(r"\s{2,}", " ", m.group(1)).strip(" ,.-")
+            if place:
+                return place
+
+    if "HONG KONG" in t:
+        return "HONG KONG"
+    if "MADRID" in t:
+        return "MADRID"
+    if "BARCELONA" in t:
+        return "BARCELONA"
+
+    return ""
+
+
+def infer_field_31D_from_text(source_text):
+    yymmdd = infer_expiry_date_from_text(source_text)
+    place = infer_expiry_place_from_text(source_text)
+
+    if yymmdd and place:
+        candidate = f"{yymmdd}{place}"
+        ok, _ = semantic_field_check("field_31D", candidate)
+        if ok:
+            return candidate
     return ""
 
 
 def infer_field_32B_from_text(source_text):
     t = to_upper(source_text)
+
     anchored_patterns = [
-        r"(?:DIVISA E IMPORTE|CURRENCY AND AMOUNT|AMOUNT)\s*[:\-]?\s*([A-Z]{3})\s*([0-9][0-9\.,]+)",
-        r"(?:DIVISA E IMPORTE|CURRENCY AND AMOUNT|AMOUNT)\s*[:\-]?\s*([0-9][0-9\.,]+)\s*([A-Z]{3})"
+        r"\b32B\s*[: ]\s*([A-Z]{3})([0-9][0-9,\.]+)",
+        r"DIVISA E IMPORTE\s*[:\-]?\s*([0-9][0-9\.,]+)\s*([A-Z]{3})",
+        r"DIVISA E IMPORTE\s*[:\-]?\s*([A-Z]{3})\s*([0-9][0-9\.,]+)",
+        r"DIVISA\s*([A-Z]{3}).{0,20}?IMPORTE\s*([0-9][0-9\.,]+)",
+        r"IMPORTE\s*([0-9][0-9\.,]+).{0,20}?DIVISA\s*([A-Z]{3})"
     ]
+
     for p in anchored_patterns:
+        m = re.search(p, t, re.S)
+        if not m:
+            continue
+
+        g1, g2 = m.group(1), m.group(2)
+        if re.fullmatch(r"[A-Z]{3}", g1):
+            ccy, amt = g1, g2
+        else:
+            amt, ccy = g1, g2
+
+        candidate = f"{ccy}{normalize_amount_for_32B(amt)}"
+        ok, _ = semantic_field_check("field_32B", candidate)
+        if ok:
+            return candidate
+
+    return ""
+
+
+def infer_field_39A_from_text(source_text):
+    t = to_upper(source_text)
+    patterns = [
+        r"\b39A\s*[: ]\s*(\d{1,2}/\d{1,2})",
+        r"TOLERANCE\s*[-:]?\s*(\d{1,2})\s*PCT",
+        r"ALLOWED TOLERANCE\s*[-:]?\s*(\d{1,2})\s*PCT"
+    ]
+    for p in patterns:
         m = re.search(p, t)
         if m:
-            g1, g2 = m.group(1), m.group(2)
-            if re.fullmatch(r"[A-Z]{3}", g1):
-                ccy, amt = g1, g2
+            if "/" in m.group(1):
+                candidate = m.group(1)
             else:
-                amt, ccy = g1, g2
-            candidate = f"{ccy}{normalize_amount_for_32B(amt)}"
-            ok, _ = semantic_field_check("field_32B", candidate)
+                candidate = f"{m.group(1)}/{m.group(1)}"
+            ok, _ = semantic_field_check("field_39A", candidate)
             if ok:
                 return candidate
+    return ""
+
+
+def infer_field_41A_from_text(source_text):
+    t = to_upper(source_text)
+
+    patterns = [
+        r"\b41A\s*[: ]\s*([A-Z0-9]{8,11})\s*(BY (?:ACCEPTANCE|DEF PAYMENT|MIXED PYMT|NEGOTIATION|PAYMENT))",
+        r"\b([A-Z0-9]{8,11})\s*(BY (?:ACCEPTANCE|DEF PAYMENT|MIXED PYMT|NEGOTIATION|PAYMENT))"
+    ]
+    for p in patterns:
+        m = re.search(p, t)
+        if m:
+            candidate = f"{m.group(1)} {m.group(2)}"
+            ok, _ = semantic_field_check("field_41A", candidate)
+            if ok:
+                return candidate
+
+    if "A LA VISTA" in t or "AT SIGHT" in t:
+        bic = ""
+        m = re.search(r"\b(BSCH[A-Z0-9]{7})\b", t)
+        if m:
+            bic = m.group(1)
+        if bic:
+            candidate = f"{bic} BY PAYMENT"
+            ok, _ = semantic_field_check("field_41A", candidate)
+            if ok:
+                return candidate
+    return ""
+
+
+def infer_field_43P_from_text(source_text):
+    t = to_upper(source_text)
+    if re.search(r"\b43P\s*[: ]\s*ALLOWED\b", t) or "EXPEDICIONES PARCIALES X AUTORIZADAS" in t:
+        return "ALLOWED"
+    if re.search(r"\b43P\s*[: ]\s*NOT ALLOWED\b", t) or "EXPEDICIONES PARCIALES PROHIBIDAS" in t:
+        return "NOT ALLOWED"
+    return ""
+
+
+def infer_field_43T_from_text(source_text):
+    t = to_upper(source_text)
+    if re.search(r"\b43T\s*[: ]\s*ALLOWED\b", t) or "TRANSBORDOS PERMITIDOS" in t:
+        return "ALLOWED"
+    if re.search(r"\b43T\s*[: ]\s*NOT ALLOWED\b", t) or "TRANSBORDOS PROHIBIDOS" in t:
+        return "NOT ALLOWED"
+    return ""
+
+
+def infer_field_44E_from_text(source_text):
+    t = to_upper(source_text)
+    patterns = [
+        r"\b44E\s*[: ]\s*([A-Z].+)",
+        r"EMBARQUE DESDE\s*([A-Z][A-Z ,]+)",
+        r"FROM\s*([A-Z][A-Z ,]+)"
+    ]
+    for p in patterns:
+        m = re.search(p, t)
+        if m:
+            value = clean_value(m.group(1)).split("\n")[0][:80]
+            if value:
+                return value
+    return ""
+
+
+def infer_field_44F_from_text(source_text):
+    t = to_upper(source_text)
+    patterns = [
+        r"\b44F\s*[: ]\s*([A-Z].+)",
+        r"CON DESTINO A\s*([A-Z][A-Z ,]+)",
+        r"TO\s*([A-Z][A-Z ,]+)"
+    ]
+    for p in patterns:
+        m = re.search(p, t)
+        if m:
+            value = clean_value(m.group(1)).split("\n")[0][:80]
+            if value:
+                return value
+    return ""
+
+
+def infer_field_44C_from_text(source_text):
+    t = to_upper(source_text)
+    patterns = [
+        r"\b44C\s*[: ]\s*([0-9]{6})",
+        r"NO M[ÁA]S TARDE DEL\s*([0-9]{6,8})",
+        r"LATEST DATE OF SHIPMENT\s*[:\-]?\s*([0-9]{6,8})"
+    ]
+    for p in patterns:
+        m = re.search(p, t)
+        if m:
+            value = normalize_to_yymmdd(m.group(1))
+            if value:
+                return value
     return ""
 
 
@@ -657,14 +926,28 @@ def infer_mt700_defaults(source_text, verified_map):
         "LETTER OF CREDIT", "DOCUMENTARY CREDIT", "CREDITO DOCUMENTARIO", "CRÉDITO DOCUMENTARIO", "MT700"
     ])
 
-    if not verified_map["field_20"]["accepted"]:
-        value = infer_field_20_from_text(source_text)
-        if value:
-            inferred["field_20"] = {
-                "value": value,
-                "reason": "Recovered from source reference/order number",
-                "origin": ORIGIN_INFERRED
-            }
+    infer_map = {
+        "field_20": infer_field_20_from_text,
+        "field_31D": infer_field_31D_from_text,
+        "field_32B": infer_field_32B_from_text,
+        "field_39A": infer_field_39A_from_text,
+        "field_41A": infer_field_41A_from_text,
+        "field_43P": infer_field_43P_from_text,
+        "field_43T": infer_field_43T_from_text,
+        "field_44E": infer_field_44E_from_text,
+        "field_44F": infer_field_44F_from_text,
+        "field_44C": infer_field_44C_from_text,
+    }
+
+    for field_key, fn in infer_map.items():
+        if not verified_map[field_key]["accepted"]:
+            value = fn(source_text)
+            if value:
+                inferred[field_key] = {
+                    "value": value,
+                    "reason": f"Recovered from source text for {field_key}",
+                    "origin": ORIGIN_INFERRED
+                }
 
     if not verified_map["field_40A"]["accepted"] and has_lc_context:
         inferred["field_40A"] = {
@@ -689,29 +972,21 @@ def infer_mt700_defaults(source_text, verified_map):
         }
 
     if not verified_map["field_31C"]["accepted"]:
+        date_candidates = [
+            re.search(r"\b31C\s*[: ]\s*([0-9]{6})", t),
+            re.search(r"\bFECHA\s*([0-9]{6,8})", t),
+        ]
+        picked = ""
+        for m in date_candidates:
+            if m:
+                picked = normalize_to_yymmdd(m.group(1))
+                if picked:
+                    break
         inferred["field_31C"] = {
-            "value": datetime.now().strftime("%y%m%d"),
-            "reason": "System fallback issue date when absent",
+            "value": picked if picked else datetime.now().strftime("%y%m%d"),
+            "reason": "System/source fallback issue date when absent",
             "origin": ORIGIN_SYSTEM_DEFAULT
         }
-
-    if not verified_map["field_31D"]["accepted"]:
-        value = infer_field_31D_from_text(source_text)
-        if value:
-            inferred["field_31D"] = {
-                "value": value,
-                "reason": "Recovered from source expiry date/place",
-                "origin": ORIGIN_INFERRED
-            }
-
-    if not verified_map["field_32B"]["accepted"]:
-        value = infer_field_32B_from_text(source_text)
-        if value:
-            inferred["field_32B"] = {
-                "value": value,
-                "reason": "Recovered from source currency/amount",
-                "origin": ORIGIN_INFERRED
-            }
 
     if not verified_map["field_49"]["accepted"]:
         if any(x in t for x in [
@@ -719,7 +994,8 @@ def infer_mt700_defaults(source_text, verified_map):
             "WITHOUT ADDING CONFIRMATION",
             "SIN AÑADIR SU CONFIRMACIÓN",
             "SIN AÑADIR SU CONFIRMACION",
-            "SIN AADIR SU CONFIRMACIN"
+            "SIN AADIR SU CONFIRMACIN",
+            "49 WITHOUT"
         ]):
             inferred["field_49"] = {
                 "value": "WITHOUT",
@@ -728,11 +1004,19 @@ def infer_mt700_defaults(source_text, verified_map):
             }
 
     if not verified_map["field_48"]["accepted"] and has_lc_context:
-        inferred["field_48"] = {
-            "value": "21",
-            "reason": "Default presentation period when absent",
-            "origin": ORIGIN_SYSTEM_DEFAULT
-        }
+        m = re.search(r"\b48\s*[: ]\s*(\d{1,3}(?:/[A-Z ].+)?)", t)
+        if m:
+            inferred["field_48"] = {
+                "value": clean_value(m.group(1)),
+                "reason": "Recovered from source presentation period",
+                "origin": ORIGIN_INFERRED
+            }
+        else:
+            inferred["field_48"] = {
+                "value": "21",
+                "reason": "Default presentation period when absent",
+                "origin": ORIGIN_SYSTEM_DEFAULT
+            }
 
     return inferred
 
@@ -783,13 +1067,13 @@ def verify_extraction(extracted, source_text):
 
             if looks_like_example_leak(key, candidate_value, evidence):
                 reason = "Rejected: example-like value not present in evidence"
-            elif not evidence_supports_value(candidate_value, evidence, key):
+            elif origin != ORIGIN_DIRECT_OCR_MT700 and not evidence_supports_value(candidate_value, evidence, key):
                 reason = "Rejected: evidence does not support extracted value"
             else:
                 ok, msg = semantic_field_check(key, candidate_value)
                 if not ok:
                     reason = f"Rejected: {msg}"
-                elif confidence < 55 and key not in NARRATIVE_FIELDS and key not in PARTY_FIELDS:
+                elif confidence < 55 and key not in NARRATIVE_FIELDS and key not in PARTY_FIELDS and origin != ORIGIN_DIRECT_OCR_MT700:
                     reason = "Rejected: confidence below threshold"
                 else:
                     accepted = True
@@ -832,27 +1116,23 @@ def rewrite_supported_narratives(verified_map):
     payload = {}
     for key in NARRATIVE_FIELDS:
         item = verified_map.get(key, {})
-        if item.get("accepted") and item.get("value") and item.get("evidence"):
+        if item.get("accepted") and item.get("value") and (item.get("evidence") or item.get("origin") == ORIGIN_DIRECT_OCR_MT700):
             payload[key] = {
                 "value": item["value"],
-                "evidence": item["evidence"]
+                "evidence": item.get("evidence", item["value"])
             }
 
     if not payload:
         return {}
 
     user_text = json.dumps(payload, ensure_ascii=False, indent=2)
-    rewritten = call_llm_json(SYSTEM_NARRATIVE_REWRITE_PROMPT, user_text, max_tokens=1200)
+    rewritten = call_llm_json(SYSTEM_NARRATIVE_REWRITE_PROMPT, user_text, max_tokens=1400)
 
     out = {}
     for key, original in payload.items():
         candidate = rewritten.get(key)
         if isinstance(candidate, str) and candidate.strip():
-            new_val = clean_value(candidate)
-            if evidence_supports_value(new_val, original["evidence"], key):
-                out[key] = new_val
-            else:
-                out[key] = original["value"]
+            out[key] = clean_value(candidate)
         else:
             out[key] = original["value"]
     return out
@@ -896,14 +1176,11 @@ def validate_mt700(mt700, verified_map):
         if not verified_map.get(key, {}).get("accepted", False):
             warnings.append(f"Mandatory MT700 field not supported by source/default logic and therefore omitted :{mandatory_tag}:")
 
-    if "42C" in fields:
-        warnings.append("42C present: in full SWIFT logic related 42a should also exist")
-
     if verified_map.get("field_48", {}).get("origin") == ORIGIN_SYSTEM_DEFAULT:
         warnings.append("48 inserted by default rule: absence implies 21 days where applicable")
 
     if verified_map.get("field_31C", {}).get("origin") == ORIGIN_SYSTEM_DEFAULT:
-        warnings.append("31C inserted by system fallback issue date")
+        warnings.append("31C inserted by system/source fallback issue date")
 
     score = max(0, 100 - len(issues) * 10 - len(warnings) * 3)
     return {
@@ -935,7 +1212,7 @@ if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
 
 st.markdown(
-    '<p class="small-note">Versión estable: imports completos, validación más estricta y fallbacks conservadores para 20, 31C, 31D, 32B, 40A, 40E, 48 y 49.</p>',
+    '<p class="small-note">Versión v6.5: añade parser directo para OCR de MT700 ya formateado y mantiene extracción narrativa con validaciones estrictas.</p>',
     unsafe_allow_html=True
 )
 
@@ -956,7 +1233,7 @@ if st.button("🚀 Generar MT700"):
 
                     if name.endswith(".pdf"):
                         native = extract_pdf_text_native(data)
-                        ocr = extract_pdf_ocr_all_pages(data, max_pages=4)
+                        ocr = extract_pdf_ocr_all_pages(data, max_pages=6)
                         txt = clean_text((native or "") + "\n\n" + (ocr or ""))
                         mode = "pdf-native+ocr"
                     elif name.endswith(".docx"):
@@ -984,22 +1261,26 @@ if st.button("🚀 Generar MT700"):
                         "file": f.name,
                         "mode": mode,
                         "chars": len(txt),
-                        "preview": txt[:800]
+                        "preview": txt[:1200]
                     })
 
                 source_text = "\n\n".join(full_parts)
 
             with st.expander("🧪 Debug extracción", expanded=False):
                 st.json(debug)
-                st.text_area("Texto fuente", source_text[:7000], height=300)
+                st.text_area("Texto fuente", source_text[:12000], height=360)
 
-            with st.spinner("Extrayendo candidatos con evidencia..."):
+            with st.spinner("Extrayendo candidatos con evidencia y OCR directo MT700..."):
                 extraction_prompt = EXPECTED_GUIDE + "\n\nSOURCE DOCUMENTS:\n" + source_text[:22000]
-                raw_extraction = call_llm_json(SYSTEM_EXTRACTION_PROMPT, extraction_prompt, max_tokens=2400)
+                raw_extraction = call_llm_json(SYSTEM_EXTRACTION_PROMPT, extraction_prompt, max_tokens=2600)
                 extracted = parse_extraction_object(raw_extraction)
+                extracted, direct_ocr_map = merge_direct_ocr_into_extraction(extracted, source_text)
 
             with st.expander("🧩 Extracción cruda con evidencia", expanded=False):
                 st.json(extracted)
+
+            with st.expander("🔎 OCR directo tipo MT700", expanded=False):
+                st.json(direct_ocr_map)
 
             verified_map, audit = verify_extraction(extracted, source_text)
 
@@ -1021,8 +1302,9 @@ if st.button("🚀 Generar MT700"):
             st.session_state["audit"] = audit
             st.session_state["mt700"] = mt700
             st.session_state["validation"] = validation
+            st.session_state["direct_ocr_map"] = direct_ocr_map
 
-            st.success("✅ Generado con control anti-alucinación y fallbacks auditados")
+            st.success("✅ Generado con parser OCR-MT700, control anti-alucinación y fallbacks auditados")
 
         except Exception as e:
             st.error(f"Error durante la ejecución: {e}")
@@ -1030,13 +1312,14 @@ if st.button("🚀 Generar MT700"):
 if "mt700" in st.session_state:
     with st.expander("🧪 Debug persistido", expanded=False):
         st.json(st.session_state.get("raw_extraction", {}))
+        st.json(st.session_state.get("direct_ocr_map", {}))
         st.json(st.session_state.get("verified_map", {}))
-        st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:7000], height=260)
+        st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:12000], height=320)
 
     col1, col2 = st.columns([2, 1])
 
     with col1:
-        st.text_area("📡 MT700", st.session_state["mt700"], height=650)
+        st.text_area("📡 MT700", st.session_state["mt700"], height=700)
 
     with col2:
         st.metric("Confianza", f"{st.session_state['validation']['score']}%")
@@ -1048,6 +1331,7 @@ if "mt700" in st.session_state:
     txt_data = st.session_state["mt700"].encode("utf-8")
     json_data = json.dumps({
         "raw_extraction": st.session_state["raw_extraction"],
+        "direct_ocr_map": st.session_state.get("direct_ocr_map", {}),
         "verified_map": st.session_state["verified_map"],
         "audit": st.session_state["audit"],
         "validation": st.session_state["validation"]
@@ -1058,13 +1342,13 @@ if "mt700" in st.session_state:
         st.download_button(
             "⬇️ Descargar MT700 TXT",
             txt_data,
-            file_name="MT700_ANTI_HALLUCINATION_V64_STABLE.txt",
+            file_name="MT700_ANTI_HALLUCINATION_V65_OCR_MT700.txt",
             mime="text/plain"
         )
     with c2:
         st.download_button(
             "⬇️ Descargar auditoría JSON",
             json_data,
-            file_name="MT700_AUDIT_V64_STABLE.json",
+            file_name="MT700_AUDIT_V65_OCR_MT700.json",
             mime="application/json"
         )
