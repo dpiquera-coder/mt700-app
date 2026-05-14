@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import shutil
 from typing import Dict, List, Tuple
+from datetime import datetime
 
 try:
     import fitz
@@ -29,7 +30,7 @@ except Exception:
     pytesseract = None
 
 st.set_page_config(
-    page_title="MT700 Generator Anti-Hallucination v6.0",
+    page_title="MT700 Generator Anti-Hallucination v6.1",
     layout="wide",
     page_icon="🏦"
 )
@@ -97,13 +98,17 @@ textarea, .stTextArea textarea {{
     opacity: 0.92;
     font-size: 0.98rem;
 }}
+.small-note {{
+    font-size: 0.9rem;
+    color: #6f1b1b;
+}}
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("""
 <div class="mt700-hero">
   <p class="mt700-title">MT700 Generator</p>
-  <p class="mt700-subtitle">Anti-hallucination extraction with evidence-gated field validation</p>
+  <p class="mt700-subtitle">Anti-hallucination extraction with SWIFT MT700 context and evidence gating</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -111,16 +116,19 @@ client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 
 ALLOWED_TAGS = [
-    "27", "20", "40A", "40E", "31C", "31D", "50", "59", "32B", "39A", "41A", "42C",
-    "43P", "43T", "44E", "44F", "44C", "45A", "46A", "47A", "48", "49", "57A", "71D", "78", "72Z"
+    "27", "20", "40A", "40E", "31C", "31D", "50", "59", "32B", "39A",
+    "41A", "42C", "43P", "43T", "44E", "44F", "44C",
+    "45A", "46A", "47A", "48", "49", "57A", "71D", "78", "72Z"
 ]
+
+MANDATORY_IN_SCOPE = ["27", "20", "40A", "31C", "40E", "31D", "50", "59", "32B", "41A", "49"]
 
 FIELD_KEYS = [
     "field_27", "field_20", "field_40A", "field_40E", "field_31C", "field_31D",
     "field_50", "field_59", "field_32B", "field_39A", "field_41A", "field_42C",
-    "field_43P", "field_43T", "field_44E", "field_44F", "field_44C", "field_45A",
-    "field_46A", "field_47A", "field_48", "field_49", "field_57A", "field_71D",
-    "field_78", "field_72Z"
+    "field_43P", "field_43T", "field_44E", "field_44F", "field_44C",
+    "field_45A", "field_46A", "field_47A", "field_48", "field_49",
+    "field_57A", "field_71D", "field_78", "field_72Z"
 ]
 
 FIELD_TO_TAG = {
@@ -133,17 +141,34 @@ FIELD_TO_TAG = {
     "field_78": "78", "field_72Z": "72Z"
 }
 
+TAG_TO_FIELD = {v: k for k, v in FIELD_TO_TAG.items()}
+
 NARRATIVE_FIELDS = {"field_45A", "field_46A", "field_47A", "field_71D", "field_78", "field_72Z"}
+
+VALID_40A_CODES = {
+    "IRREVOCABLE",
+    "IRREVOCABLE TRANSFERABLE",
+    "IRREVOCABLE STANDBY",
+    "IRREVOC TRANS STANDBY"
+}
+
+VALID_40E_CODES = {
+    "UCP LATEST VERSION",
+    "EUCP LATEST VERSION",
+    "EUCPURR LATEST VERSION",
+    "ISP LATEST VERSION",
+    "OTHR"
+}
 
 EXAMPLE_LIKE_VALUES = {
     "field_27": {"1/1"},
-    "field_40A": {"IRREVOCABLE", "REVOCABLE"},
-    "field_40E": {"UCP LATEST VERSION"},
+    "field_40A": VALID_40A_CODES,
+    "field_40E": VALID_40E_CODES,
     "field_39A": {"10/10"},
     "field_43P": {"ALLOWED", "NOT ALLOWED"},
     "field_43T": {"ALLOWED", "NOT ALLOWED"},
     "field_48": {"21/AFTER SHIPMENT DATE"},
-    "field_49": {"WITHOUT"},
+    "field_49": {"WITHOUT", "CONFIRM", "MAY ADD", "WITHOUT"}
 }
 
 SPANISH_TO_ENGLISH_REPLACEMENTS = {
@@ -176,9 +201,52 @@ SPANISH_TO_ENGLISH_REPLACEMENTS = {
     "SI HUBIERA": "IF ANY"
 }
 
-SYSTEM_EXTRACTION_PROMPT = """
-You are a senior Trade Finance extraction engine.
+SWIFT_MT700_CONTEXT = """
+You are extracting data for SWIFT MT700 Issue of a Documentary Credit.
 
+Authoritative MT700 structural context derived from SWIFT Category 7 Message Reference Guide:
+- Mandatory MT700 fields in this implementation: 27, 40A, 20, 31C, 40E, 31D, 50, 59, 32B, 41A, 49.
+- Field 27 format: 1!n/1!n.
+- Field 20 format: 16x. Must not start or end with '/' and must not contain '//'.
+- Field 31C format: 6!n valid YYMMDD date.
+- Field 31D format: 6!n29x = expiry date YYMMDD immediately followed by expiry place.
+- Field 32B format: 3!a15d = currency code plus amount only.
+- Field 39A format: 2n/2n.
+- Field 40A contains only one valid code such as:
+  IRREVOCABLE
+  IRREVOCABLE TRANSFERABLE
+  IRREVOCABLE STANDBY
+  IRREVOC TRANS STANDBY
+- Field 40E contains applicable rules only. Valid codes include:
+  UCP LATEST VERSION
+  EUCP LATEST VERSION
+  EUCPURR LATEST VERSION
+  ISP LATEST VERSION
+  OTHR
+- Field 41A is availability with bank identifier plus method.
+- Field 42C may only be used consistently with SWIFT rules requiring related 42a in full MT700 logic.
+- Either 44C or 44D may be present, but not both.
+- Field 44E is port of loading/airport of departure.
+- Field 44F is port of discharge/airport of destination.
+- Field 45A is description of goods/services.
+- Field 46A is documents required.
+- Field 47A is additional conditions.
+- Field 48 is period for presentation in days, format 3n[/35x].
+- Field 49 is confirmation instructions and is mandatory.
+- Field 71D is charges.
+- Field 78 is instructions to paying/accepting/negotiating bank.
+- Field 57A is advise-through bank / routed bank.
+- Field 72Z is sender to receiver information.
+
+Anti-hallucination policy:
+- Extract only if supported by the source documents.
+- If unsupported, return null evidence and found=false.
+- Do not use example values unless literally supported by the source.
+- Do not fill mandatory fields just because SWIFT says they are mandatory.
+- SWIFT rules define validity and format, not permission to invent missing values.
+"""
+
+SYSTEM_EXTRACTION_PROMPT = SWIFT_MT700_CONTEXT + """
 Task:
 Extract MT700 field candidates from source documents.
 
@@ -192,35 +260,25 @@ For every requested key, return an object with exactly:
 Keys:
 field_27, field_20, field_40A, field_40E, field_31C, field_31D,
 field_50, field_59, field_32B, field_39A, field_41A, field_42C,
-field_43P, field_43T, field_44E, field_44F, field_44C, field_45A,
-field_46A, field_47A, field_48, field_49, field_57A, field_71D,
-field_78, field_72Z
+field_43P, field_43T, field_44E, field_44F, field_44C,
+field_45A, field_46A, field_47A, field_48, field_49,
+field_57A, field_71D, field_78, field_72Z
 
-Very important anti-hallucination rules:
-- If the source does not clearly support a field, set:
-  value = null, evidence = null, found = false, confidence = 0
-- Never use example values unless the source explicitly supports them.
-- Evidence must be a literal short quote from the source text.
-- Do not paraphrase evidence.
-- Do not infer missing data from common MT700 patterns.
-- Do not complete addresses, BICs, dates, percentages, ports, charges, or rules from your own knowledge.
-- Narrative fields may be translated into concise English in value, but only if supported by evidence.
-- If value is translated, evidence must still contain the original literal source wording.
-
-Field constraints:
-- field_40A must only be IRREVOCABLE or REVOCABLE if explicitly supported.
-- field_40E must only be applicable rules, not addresses.
-- field_32B must only be currency+amount.
-- field_39A must only be tolerance.
-- field_48 must only be presentation period.
-- field_49 must only be confirmation instruction.
-- field_71D must only be charges clause.
+Strict rules:
+- Evidence must be a short literal quote from source text.
+- Value may be normalized to SWIFT format only if clearly supported by evidence.
+- For 40A and 40E, output only valid SWIFT codes supported by evidence.
+- For 31C and 44C, normalize to YYMMDD only if a source date clearly supports it.
+- For 31D, output YYMMDD plus place only if both are supported.
+- For 32B, output currency+amount only if source supports both.
+- For 45A/46A/47A/71D/78/72Z, concise banking English is allowed only when grounded in evidence.
+- Never create values from examples or defaults.
 """
 
 SYSTEM_NARRATIVE_REWRITE_PROMPT = """
 You are a Trade Finance banking editor.
 
-You will receive supported narrative fields with literal evidence already validated.
+You will receive supported narrative MT700 fields with literal evidence already validated.
 Rewrite ONLY the value into concise professional MT700 English.
 
 Return ONLY one JSON object with the same keys.
@@ -228,7 +286,7 @@ Do not add facts.
 Do not add lines not supported by the evidence.
 Preserve amounts, dates, percentages, names, places, bank names, and references.
 Use uppercase.
-If the current value is already acceptable, return it unchanged.
+If current value is already acceptable, return it unchanged.
 """
 
 EXPECTED_GUIDE = """
@@ -309,7 +367,7 @@ def extract_pdf_ocr_all_pages(data: bytes, max_pages: int = 4) -> str:
     except Exception:
         return ""
 
-def call_llm_json(system_prompt: str, user_text: str, max_tokens: int = 2000) -> Dict:
+def call_llm_json(system_prompt: str, user_text: str, max_tokens: int = 2200) -> Dict:
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
@@ -369,9 +427,9 @@ def evidence_supports_value(value: str, evidence: str, field_key: str) -> bool:
         return core in e or any(x in e for x in re.split(r"[^A-Z0-9]+", core) if len(x) >= 6)
 
     if field_key == "field_31D":
-        date_match = re.match(r"^(\d{6})(.*)$", v)
-        if date_match:
-            d, place = date_match.groups()
+        m = re.match(r"^(\d{6})(.*)$", v)
+        if m:
+            d, place = m.groups()
             return d in e and (place.strip()[:4] in e if place.strip() else True)
 
     plain = re.sub(r"\s+", "", v)
@@ -395,18 +453,44 @@ def looks_like_example_leak(field_key: str, value: str, evidence: str) -> bool:
     e = normalized_for_match(evidence or "")
     return v not in e
 
+def valid_yymmdd(value: str) -> bool:
+    if not re.fullmatch(r"\d{6}", value or ""):
+        return False
+    try:
+        datetime.strptime(value, "%y%m%d")
+        return True
+    except Exception:
+        return False
+
 def semantic_field_check(field_key: str, value: str) -> Tuple[bool, str]:
     v = to_upper(value)
 
-    if field_key == "field_40A":
-        if v not in {"IRREVOCABLE", "REVOCABLE"}:
-            return False, "40A must be IRREVOCABLE or REVOCABLE only"
+    if field_key == "field_20":
+        if len(v) > 16:
+            return False, "20 exceeds 16 characters"
+        if v.startswith("/") or v.endswith("/") or "//" in v:
+            return False, "20 cannot start/end with slash or contain double slash"
+    elif field_key == "field_31C":
+        if not valid_yymmdd(v):
+            return False, "31C must be valid YYMMDD"
+    elif field_key == "field_31D":
+        m = re.match(r"^(\d{6})(.+)$", v)
+        if not m:
+            return False, "31D must be YYMMDD plus place"
+        if not valid_yymmdd(m.group(1)):
+            return False, "31D date invalid"
     elif field_key == "field_32B":
         if not re.fullmatch(r"[A-Z]{3}[0-9][0-9,\.]*", v.replace(" ", "")):
             return False, "32B must be currency+amount"
     elif field_key == "field_39A":
         if not re.fullmatch(r"\d{1,2}/\d{1,2}", v):
-            return False, "39A must be tolerance format"
+            return False, "39A must be 2N/2N style tolerance"
+    elif field_key == "field_40A":
+        if v not in VALID_40A_CODES:
+            return False, "40A invalid code"
+    elif field_key == "field_40E":
+        if v not in VALID_40E_CODES and not v.startswith("OTHR"):
+            return False, "40E invalid code"
     elif field_key == "field_43P":
         if v not in {"ALLOWED", "NOT ALLOWED"}:
             return False, "43P invalid"
@@ -416,6 +500,8 @@ def semantic_field_check(field_key: str, value: str) -> Tuple[bool, str]:
     elif field_key == "field_48":
         if "%" in v:
             return False, "48 cannot contain percentage"
+        if not re.fullmatch(r"\d{1,3}(/.+)?", v):
+            return False, "48 invalid format"
     elif field_key == "field_49":
         if "%" in v:
             return False, "49 cannot contain percentage"
@@ -458,13 +544,13 @@ def verify_extraction(extracted: Dict) -> Tuple[Dict, List[str]]:
         if key == "field_27" and not accepted:
             verified[key] = {
                 "value": "1/1",
-                "evidence": None,
+                "evidence": "",
                 "found": True,
                 "confidence": 100,
                 "accepted": True,
-                "reason": "Default operational rule"
+                "reason": "Accepted by operational default"
             }
-            audit.append(f"{key}: accepted by business default 1/1")
+            audit.append(f"{key}: accepted by operational default 1/1")
             continue
 
         verified[key] = {
@@ -496,16 +582,16 @@ def rewrite_supported_narratives(verified_map: Dict) -> Dict:
     rewritten = call_llm_json(SYSTEM_NARRATIVE_REWRITE_PROMPT, user_text, max_tokens=1200)
 
     out = {}
-    for key, obj in payload.items():
+    for key, original in payload.items():
         candidate = rewritten.get(key)
         if isinstance(candidate, str) and candidate.strip():
             new_val = clean_value(candidate)
-            if evidence_supports_value(new_val, obj["evidence"], key):
+            if evidence_supports_value(new_val, original["evidence"], key):
                 out[key] = new_val
             else:
-                out[key] = obj["value"]
+                out[key] = original["value"]
         else:
-            out[key] = obj["value"]
+            out[key] = original["value"]
     return out
 
 def build_mt700_from_verified_map(verified_map: Dict) -> str:
@@ -539,6 +625,14 @@ def validate_mt700(mt700: str, verified_map: Dict) -> Dict:
         if not accepted and tag in fields and key != "field_27":
             issues.append(f"Unverified field leaked into final MT700 :{tag}:")
 
+    for mandatory_tag in MANDATORY_IN_SCOPE:
+        key = TAG_TO_FIELD[mandatory_tag]
+        if not verified_map.get(key, {}).get("accepted", False):
+            warnings.append(f"Mandatory MT700 field not supported by source and therefore omitted :{mandatory_tag}:")
+
+    if "42C" in fields:
+        warnings.append("42C present: in full SWIFT logic related 42a should also exist")
+
     score = max(0, 100 - len(issues) * 10 - len(warnings) * 3)
     return {
         "is_valid": len(issues) == 0,
@@ -564,6 +658,8 @@ def extraction_table_rows(verified_map: Dict) -> List[Dict]:
 
 if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
+
+st.markdown('<p class="small-note">Esta versión usa contexto SWIFT MT700 resumido, evidencia literal y validación local dura.</p>', unsafe_allow_html=True)
 
 if st.button("🚀 Generar MT700"):
     if not files:
@@ -616,9 +712,9 @@ if st.button("🚀 Generar MT700"):
                 st.json(debug)
                 st.text_area("Texto fuente", source_text[:7000], height=300)
 
-            with st.spinner("Extrayendo candidatos con evidencia..."):
+            with st.spinner("Extrayendo candidatos con evidencia usando contexto SWIFT..."):
                 extraction_prompt = EXPECTED_GUIDE + "\n\nSOURCE DOCUMENTS:\n" + source_text[:22000]
-                raw_extraction = call_llm_json(SYSTEM_EXTRACTION_PROMPT, extraction_prompt, max_tokens=2200)
+                raw_extraction = call_llm_json(SYSTEM_EXTRACTION_PROMPT, extraction_prompt, max_tokens=2400)
                 extracted = parse_extraction_object(raw_extraction)
 
             with st.expander("🧩 Extracción cruda con evidencia", expanded=False):
@@ -645,7 +741,7 @@ if st.button("🚀 Generar MT700"):
             st.session_state["mt700"] = mt700
             st.session_state["validation"] = validation
 
-            st.success("✅ Generado con control anti-alucinación")
+            st.success("✅ Generado con control anti-alucinación y contexto SWIFT")
 
         except Exception as e:
             st.error(f"Error durante la ejecución: {e}")
@@ -678,6 +774,6 @@ if "mt700" in st.session_state:
 
     c1, c2 = st.columns(2)
     with c1:
-        st.download_button("⬇️ Descargar MT700 TXT", txt_data, file_name="MT700_ANTI_HALLUCINATION.txt", mime="text/plain")
+        st.download_button("⬇️ Descargar MT700 TXT", txt_data, file_name="MT700_ANTI_HALLUCINATION_V61.txt", mime="text/plain")
     with c2:
-        st.download_button("⬇️ Descargar auditoría JSON", json_data, file_name="MT700_AUDIT.json", mime="application/json")
+        st.download_button("⬇️ Descargar auditoría JSON", json_data, file_name="MT700_AUDIT_V61.json", mime="application/json")
