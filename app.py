@@ -32,7 +32,7 @@ except Exception:
 
 
 st.set_page_config(
-    page_title="MT700 Generator Anti-Hallucination v6.5 OCR-MT700",
+    page_title="MT700 Generator Anti-Hallucination v6.6",
     layout="wide",
     page_icon="🏦"
 )
@@ -106,7 +106,7 @@ textarea, .stTextArea textarea {{
 st.markdown("""
 <div class="mt700-hero">
   <p class="mt700-title">MT700 Generator</p>
-  <p class="mt700-subtitle">Narrative extraction + direct OCR parsing of MT700 formatted PDFs</p>
+  <p class="mt700-subtitle">Narrative extraction + direct OCR MT700 parsing + field descriptions in audit and validation</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -140,6 +140,113 @@ FIELD_TO_TAG = {
 }
 
 TAG_TO_FIELD = {v: k for k, v in FIELD_TO_TAG.items()}
+
+FIELD_METADATA = {
+    "field_27": {
+        "name": "Sequence of Total",
+        "description": "Número de mensaje dentro de la serie total del crédito, por ejemplo 1/1."
+    },
+    "field_20": {
+        "name": "Documentary Credit Number",
+        "description": "Referencia única del crédito documentario asignada por el emisor."
+    },
+    "field_40A": {
+        "name": "Form of Documentary Credit",
+        "description": "Indica la forma del crédito, por ejemplo si es irrevocable."
+    },
+    "field_40E": {
+        "name": "Applicable Rules",
+        "description": "Reglas aplicables al crédito, por ejemplo UCP o eUCP."
+    },
+    "field_31C": {
+        "name": "Date of Issue",
+        "description": "Fecha en la que el crédito es emitido por el banco emisor."
+    },
+    "field_31D": {
+        "name": "Date and Place of Expiry",
+        "description": "Fecha y lugar donde expira el crédito documentario."
+    },
+    "field_50": {
+        "name": "Applicant",
+        "description": "Ordenante o solicitante del crédito, normalmente nombre y dirección."
+    },
+    "field_59": {
+        "name": "Beneficiary",
+        "description": "Beneficiario del crédito, normalmente nombre y dirección."
+    },
+    "field_32B": {
+        "name": "Currency Code, Amount",
+        "description": "Divisa e importe del crédito."
+    },
+    "field_39A": {
+        "name": "Percentage Credit Amount Tolerance",
+        "description": "Tolerancia permitida sobre el importe del crédito, por ejemplo 10/10."
+    },
+    "field_41A": {
+        "name": "Available With... By...",
+        "description": "Banco con el que está disponible el crédito y forma de utilización, por ejemplo BY PAYMENT."
+    },
+    "field_42C": {
+        "name": "Drafts at",
+        "description": "Condición o tenor de la letra, si aplica."
+    },
+    "field_43P": {
+        "name": "Partial Shipments",
+        "description": "Indica si se permiten expediciones parciales."
+    },
+    "field_43T": {
+        "name": "Transhipment",
+        "description": "Indica si se permite transbordo."
+    },
+    "field_44E": {
+        "name": "Port of Loading / Airport of Departure",
+        "description": "Puerto de carga o aeropuerto de salida."
+    },
+    "field_44F": {
+        "name": "Port of Discharge / Airport of Destination",
+        "description": "Puerto de descarga o aeropuerto de destino."
+    },
+    "field_44C": {
+        "name": "Latest Date of Shipment",
+        "description": "Última fecha permitida de embarque."
+    },
+    "field_45A": {
+        "name": "Description of Goods and/or Services",
+        "description": "Descripción de la mercancía o servicios cubiertos por el crédito."
+    },
+    "field_46A": {
+        "name": "Documents Required",
+        "description": "Documentos que deben presentarse bajo el crédito."
+    },
+    "field_47A": {
+        "name": "Additional Conditions",
+        "description": "Condiciones adicionales aplicables al crédito."
+    },
+    "field_48": {
+        "name": "Period for Presentation",
+        "description": "Número de días dentro de los cuales deben presentarse los documentos."
+    },
+    "field_49": {
+        "name": "Confirmation Instructions",
+        "description": "Instrucciones de confirmación para el banco receptor."
+    },
+    "field_57A": {
+        "name": "Advise Through Bank / Second Advising Bank",
+        "description": "Banco a través del cual se avisa el crédito o segundo banco avisador."
+    },
+    "field_71D": {
+        "name": "Charges",
+        "description": "Quién asume los gastos y comisiones bancarias."
+    },
+    "field_78": {
+        "name": "Instructions to the Paying/Accepting/Negotiating Bank",
+        "description": "Instrucciones al banco pagador, aceptante o negociador."
+    },
+    "field_72Z": {
+        "name": "Sender to Receiver Information",
+        "description": "Información adicional del emisor al receptor."
+    }
+}
 
 NARRATIVE_FIELDS = {"field_45A", "field_46A", "field_47A", "field_71D", "field_78", "field_72Z"}
 PARTY_FIELDS = {"field_50", "field_59"}
@@ -653,7 +760,6 @@ def parse_ocr_mt700_blocks(source_text):
     t = fix_common_ocr_swift_noise(source_text)
     tags = ALLOWED_TAGS[:]
     tag_alt = "|".join(sorted(tags, key=len, reverse=True))
-
     results = {}
 
     for tag in tags:
@@ -695,7 +801,6 @@ def merge_direct_ocr_into_extraction(extracted, source_text):
 
 def infer_field_20_from_text(source_text):
     t = to_upper(source_text)
-
     patterns_priority = [
         r"\b20\s*[: ]\s*([A-Z0-9\-\/]{3,16})",
         r"ORDER\s*NO\.?\s*[:\-]?\s*([A-Z0-9\-\/]{3,16})",
@@ -706,7 +811,6 @@ def infer_field_20_from_text(source_text):
         r"REFERENCE\s*[:\-]?\s*([A-Z0-9\-\/]{3,16})",
         r"OPERACI[ÓO]N\s*[:\-]?\s*([A-Z0-9\-\/]{3,16})"
     ]
-
     for p in patterns_priority:
         m = re.search(p, t)
         if not m:
@@ -720,13 +824,11 @@ def infer_field_20_from_text(source_text):
 
 def infer_expiry_date_from_text(source_text):
     t = to_upper(source_text)
-
     patterns = [
         r"\b31D\s*[: ]\s*([0-9]{6})",
         r"LUGAR Y FECHA DE VENCIMIENTO\s*[:\-]?\s*([0-9]{6,8})",
         r"EXPIRY(?: PLACE)?(?: AND DATE)?\s*[:\-]?\s*([0-9]{6,8})"
     ]
-
     for p in patterns:
         m = re.search(p, t)
         if m:
@@ -738,13 +840,11 @@ def infer_expiry_date_from_text(source_text):
 
 def infer_expiry_place_from_text(source_text):
     t = to_upper(source_text)
-
     patterns = [
         r"\b31D\s*[: ]\s*[0-9]{6}\s*([A-Z][A-Z ,\-.]{2,40})",
         r"LUGAR Y FECHA DE VENCIMIENTO\s*[0-9]{6,8}\s*[-,:]?\s*([A-Z][A-Z ,\-.]{2,40})",
         r"EXPIRY(?: PLACE)?(?: AND DATE)?\s*[0-9]{6,8}\s*[-,:]?\s*([A-Z][A-Z ,\-.]{2,40})"
     ]
-
     for p in patterns:
         m = re.search(p, t)
         if m:
@@ -765,7 +865,6 @@ def infer_expiry_place_from_text(source_text):
 def infer_field_31D_from_text(source_text):
     yymmdd = infer_expiry_date_from_text(source_text)
     place = infer_expiry_place_from_text(source_text)
-
     if yymmdd and place:
         candidate = f"{yymmdd}{place}"
         ok, _ = semantic_field_check("field_31D", candidate)
@@ -776,7 +875,6 @@ def infer_field_31D_from_text(source_text):
 
 def infer_field_32B_from_text(source_text):
     t = to_upper(source_text)
-
     anchored_patterns = [
         r"\b32B\s*[: ]\s*([A-Z]{3})([0-9][0-9,\.]+)",
         r"DIVISA E IMPORTE\s*[:\-]?\s*([0-9][0-9\.,]+)\s*([A-Z]{3})",
@@ -784,12 +882,10 @@ def infer_field_32B_from_text(source_text):
         r"DIVISA\s*([A-Z]{3}).{0,20}?IMPORTE\s*([0-9][0-9\.,]+)",
         r"IMPORTE\s*([0-9][0-9\.,]+).{0,20}?DIVISA\s*([A-Z]{3})"
     ]
-
     for p in anchored_patterns:
         m = re.search(p, t, re.S)
         if not m:
             continue
-
         g1, g2 = m.group(1), m.group(2)
         if re.fullmatch(r"[A-Z]{3}", g1):
             ccy, amt = g1, g2
@@ -800,7 +896,6 @@ def infer_field_32B_from_text(source_text):
         ok, _ = semantic_field_check("field_32B", candidate)
         if ok:
             return candidate
-
     return ""
 
 
@@ -826,7 +921,6 @@ def infer_field_39A_from_text(source_text):
 
 def infer_field_41A_from_text(source_text):
     t = to_upper(source_text)
-
     patterns = [
         r"\b41A\s*[: ]\s*([A-Z0-9]{8,11})\s*(BY (?:ACCEPTANCE|DEF PAYMENT|MIXED PYMT|NEGOTIATION|PAYMENT))",
         r"\b([A-Z0-9]{8,11})\s*(BY (?:ACCEPTANCE|DEF PAYMENT|MIXED PYMT|NEGOTIATION|PAYMENT))"
@@ -1154,6 +1248,27 @@ def parse_mt700_fields(mt700):
     return {tag: value.strip() for tag, value in pattern.findall(mt700 or "")}
 
 
+def enrich_validation_messages(messages):
+    enriched = []
+    for msg in messages:
+        m = re.search(r":([0-9]{2}[A-Z]?):", msg)
+        if not m:
+            enriched.append(msg)
+            continue
+
+        tag = m.group(1)
+        field_key = TAG_TO_FIELD.get(tag)
+        meta = FIELD_METADATA.get(field_key, {})
+        name = meta.get("name", "")
+        desc = meta.get("description", "")
+
+        if name or desc:
+            enriched.append(f"{msg} | {name} - {desc}")
+        else:
+            enriched.append(msg)
+    return enriched
+
+
 def validate_mt700(mt700, verified_map):
     fields = parse_mt700_fields(mt700)
     issues = []
@@ -1182,6 +1297,9 @@ def validate_mt700(mt700, verified_map):
     if verified_map.get("field_31C", {}).get("origin") == ORIGIN_SYSTEM_DEFAULT:
         warnings.append("31C inserted by system/source fallback issue date")
 
+    issues = enrich_validation_messages(issues)
+    warnings = enrich_validation_messages(warnings)
+
     score = max(0, 100 - len(issues) * 10 - len(warnings) * 3)
     return {
         "is_valid": len(issues) == 0,
@@ -1195,9 +1313,12 @@ def extraction_table_rows(verified_map):
     rows = []
     for key in FIELD_KEYS:
         item = verified_map.get(key, {})
+        meta = FIELD_METADATA.get(key, {})
         rows.append({
             "field": key,
             "tag": FIELD_TO_TAG[key],
+            "field_name": meta.get("name", ""),
+            "description": meta.get("description", ""),
             "accepted": item.get("accepted", False),
             "origin": item.get("origin", ""),
             "confidence": item.get("confidence", 0),
@@ -1212,7 +1333,7 @@ if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
 
 st.markdown(
-    '<p class="small-note">Versión v6.5: añade parser directo para OCR de MT700 ya formateado y mantiene extracción narrativa con validaciones estrictas.</p>',
+    '<p class="small-note">Versión v6.6: OCR MT700, validación anti-alucinación, defaults auditados y descripción funcional del campo en auditoría/validación.</p>',
     unsafe_allow_html=True
 )
 
@@ -1304,7 +1425,7 @@ if st.button("🚀 Generar MT700"):
             st.session_state["validation"] = validation
             st.session_state["direct_ocr_map"] = direct_ocr_map
 
-            st.success("✅ Generado con parser OCR-MT700, control anti-alucinación y fallbacks auditados")
+            st.success("✅ Generado con parser OCR-MT700, control anti-alucinación, fallbacks auditados y descripciones funcionales")
 
         except Exception as e:
             st.error(f"Error durante la ejecución: {e}")
@@ -1342,13 +1463,13 @@ if "mt700" in st.session_state:
         st.download_button(
             "⬇️ Descargar MT700 TXT",
             txt_data,
-            file_name="MT700_ANTI_HALLUCINATION_V65_OCR_MT700.txt",
+            file_name="MT700_ANTI_HALLUCINATION_V66.txt",
             mime="text/plain"
         )
     with c2:
         st.download_button(
             "⬇️ Descargar auditoría JSON",
             json_data,
-            file_name="MT700_AUDIT_V65_OCR_MT700.json",
+            file_name="MT700_AUDIT_V66.json",
             mime="application/json"
         )
