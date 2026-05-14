@@ -30,7 +30,7 @@ except Exception:
     pytesseract = None
 
 st.set_page_config(
-    page_title="MT700 Generator Anti-Hallucination v6.1",
+    page_title="MT700 Generator Anti-Hallucination v6.2",
     layout="wide",
     page_icon="🏦"
 )
@@ -108,7 +108,7 @@ textarea, .stTextArea textarea {{
 st.markdown("""
 <div class="mt700-hero">
   <p class="mt700-title">MT700 Generator</p>
-  <p class="mt700-subtitle">Anti-hallucination extraction with SWIFT MT700 context and evidence gating</p>
+  <p class="mt700-subtitle">Anti-hallucination extraction with stronger party field recovery for 50 and 59</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -144,6 +144,7 @@ FIELD_TO_TAG = {
 TAG_TO_FIELD = {v: k for k, v in FIELD_TO_TAG.items()}
 
 NARRATIVE_FIELDS = {"field_45A", "field_46A", "field_47A", "field_71D", "field_78", "field_72Z"}
+PARTY_FIELDS = {"field_50", "field_59"}
 
 VALID_40A_CODES = {
     "IRREVOCABLE",
@@ -168,7 +169,11 @@ EXAMPLE_LIKE_VALUES = {
     "field_43P": {"ALLOWED", "NOT ALLOWED"},
     "field_43T": {"ALLOWED", "NOT ALLOWED"},
     "field_48": {"21/AFTER SHIPMENT DATE"},
-    "field_49": {"WITHOUT", "CONFIRM", "MAY ADD", "WITHOUT"}
+    "field_49": {"WITHOUT", "CONFIRM", "MAY ADD"}
+}
+
+BANK_HINT_WORDS = {
+    "BANK", "BRANCH", "SWIFT", "BIC", "ACCOUNT", "ACCNO", "A/C", "CONSTRUCTION BANK"
 }
 
 SPANISH_TO_ENGLISH_REPLACEMENTS = {
@@ -204,46 +209,27 @@ SPANISH_TO_ENGLISH_REPLACEMENTS = {
 SWIFT_MT700_CONTEXT = """
 You are extracting data for SWIFT MT700 Issue of a Documentary Credit.
 
-Authoritative MT700 structural context derived from SWIFT Category 7 Message Reference Guide:
-- Mandatory MT700 fields in this implementation: 27, 40A, 20, 31C, 40E, 31D, 50, 59, 32B, 41A, 49.
-- Field 27 format: 1!n/1!n.
-- Field 20 format: 16x. Must not start or end with '/' and must not contain '//'.
-- Field 31C format: 6!n valid YYMMDD date.
-- Field 31D format: 6!n29x = expiry date YYMMDD immediately followed by expiry place.
-- Field 32B format: 3!a15d = currency code plus amount only.
-- Field 39A format: 2n/2n.
-- Field 40A contains only one valid code such as:
-  IRREVOCABLE
-  IRREVOCABLE TRANSFERABLE
-  IRREVOCABLE STANDBY
-  IRREVOC TRANS STANDBY
-- Field 40E contains applicable rules only. Valid codes include:
-  UCP LATEST VERSION
-  EUCP LATEST VERSION
-  EUCPURR LATEST VERSION
-  ISP LATEST VERSION
-  OTHR
-- Field 41A is availability with bank identifier plus method.
-- Field 42C may only be used consistently with SWIFT rules requiring related 42a in full MT700 logic.
-- Either 44C or 44D may be present, but not both.
-- Field 44E is port of loading/airport of departure.
-- Field 44F is port of discharge/airport of destination.
-- Field 45A is description of goods/services.
-- Field 46A is documents required.
-- Field 47A is additional conditions.
-- Field 48 is period for presentation in days, format 3n[/35x].
-- Field 49 is confirmation instructions and is mandatory.
-- Field 71D is charges.
-- Field 78 is instructions to paying/accepting/negotiating bank.
-- Field 57A is advise-through bank / routed bank.
-- Field 72Z is sender to receiver information.
+Authoritative MT700 structural context:
+- Field 50 Applicant format is Name and Address.
+- Field 59 Beneficiary format is Name and Address.
+- Field 57A is Advise Through Bank.
+- Field 41A is Available With... By...
+- Field 50 is not a bank field.
+- Field 59 is not the advising bank or available-with bank.
+- Field 20 format: 16x and must not start or end with '/' and must not contain '//'.
+- Field 31C format: YYMMDD.
+- Field 31D format: YYMMDD plus expiry place.
+- Field 32B format: currency code plus amount.
+- Field 40A valid code values are restricted.
+- Field 40E valid rules code values are restricted.
+- Field 48 is period for presentation.
+- Field 49 is confirmation instructions.
 
 Anti-hallucination policy:
-- Extract only if supported by the source documents.
+- Extract only if supported by source text.
 - If unsupported, return null evidence and found=false.
-- Do not use example values unless literally supported by the source.
-- Do not fill mandatory fields just because SWIFT says they are mandatory.
-- SWIFT rules define validity and format, not permission to invent missing values.
+- Do not use example values unless literally supported.
+- Do not fill mandatory fields because they are mandatory.
 """
 
 SYSTEM_EXTRACTION_PROMPT = SWIFT_MT700_CONTEXT + """
@@ -265,13 +251,11 @@ field_45A, field_46A, field_47A, field_48, field_49,
 field_57A, field_71D, field_78, field_72Z
 
 Strict rules:
-- Evidence must be a short literal quote from source text.
-- Value may be normalized to SWIFT format only if clearly supported by evidence.
+- Evidence must be a literal short quote from source text.
+- For field_50 and field_59, prefer full name+address block if available.
+- For field_59, never return an advising bank or available-with bank unless source clearly identifies the bank itself as beneficiary.
+- For field_57A and field_41A, prefer bank/BIC content.
 - For 40A and 40E, output only valid SWIFT codes supported by evidence.
-- For 31C and 44C, normalize to YYMMDD only if a source date clearly supports it.
-- For 31D, output YYMMDD plus place only if both are supported.
-- For 32B, output currency+amount only if source supports both.
-- For 45A/46A/47A/71D/78/72Z, concise banking English is allowed only when grounded in evidence.
 - Never create values from examples or defaults.
 """
 
@@ -408,9 +392,50 @@ def normalized_for_match(s: str) -> str:
     s = re.sub(r"\s+", " ", s)
     return s.strip()
 
+def normalize_party_block(text: str) -> str:
+    t = clean_value(text)
+    t = re.sub(r"\s*,\s*", ", ", t)
+    t = re.sub(r"\s{2,}", " ", t)
+    return t.strip(" .:-")
+
+def extract_party_from_evidence(evidence: str) -> str:
+    if not evidence:
+        return ""
+    e = normalize_party_block(evidence)
+    e = re.sub(r"^(BENEFICIARY|APPLICANT|ORDENANTE|SOLICITANTE|FIELD 50|FIELD 59|50|59)\s*", "", e).strip(" .:-")
+    return e
+
+def evidence_supports_party_value(value: str, evidence: str) -> bool:
+    v = normalize_party_block(value)
+    e = normalize_party_block(evidence)
+
+    if not v or not e:
+        return False
+
+    v_tokens = [t for t in re.split(r"[^A-Z0-9]+", v) if len(t) >= 3]
+    e_tokens = set(t for t in re.split(r"[^A-Z0-9]+", e) if len(t) >= 3)
+
+    if not v_tokens:
+        return False
+
+    overlap = sum(1 for t in v_tokens if t in e_tokens)
+    has_address_hint = any(x in e for x in [
+        "ROAD", "STREET", "BUILDING", "NO", "PORT", "SPAIN", "CHINA", "GUANGZHOU",
+        "GIRONA", "MADRID", "ORDIS", "PANYU", "SOUTH", "CENTRAL", "CANTABRIA"
+    ])
+
+    return overlap >= max(2, len(v_tokens) // 2) or (overlap >= 2 and has_address_hint)
+
+def looks_like_bank_text(value: str) -> bool:
+    v = normalized_for_match(value)
+    return any(word in v for word in BANK_HINT_WORDS)
+
 def evidence_supports_value(value: str, evidence: str, field_key: str) -> bool:
     if not value or not evidence:
         return False
+
+    if field_key in PARTY_FIELDS:
+        return evidence_supports_party_value(value, evidence)
 
     v = normalized_for_match(value)
     e = normalized_for_match(evidence)
@@ -484,7 +509,7 @@ def semantic_field_check(field_key: str, value: str) -> Tuple[bool, str]:
             return False, "32B must be currency+amount"
     elif field_key == "field_39A":
         if not re.fullmatch(r"\d{1,2}/\d{1,2}", v):
-            return False, "39A must be 2N/2N style tolerance"
+            return False, "39A must be tolerance format"
     elif field_key == "field_40A":
         if v not in VALID_40A_CODES:
             return False, "40A invalid code"
@@ -502,14 +527,26 @@ def semantic_field_check(field_key: str, value: str) -> Tuple[bool, str]:
             return False, "48 cannot contain percentage"
         if not re.fullmatch(r"\d{1,3}(/.+)?", v):
             return False, "48 invalid format"
-    elif field_key == "field_49":
-        if "%" in v:
-            return False, "49 cannot contain percentage"
     elif field_key == "field_71D":
         if re.fullmatch(r"[0-9,\.]+", v):
             return False, "71D cannot be numeric only"
+    elif field_key == "field_50":
+        if looks_like_bank_text(v):
+            return False, "50 should be applicant, not bank field"
+    elif field_key == "field_59":
+        if looks_like_bank_text(v):
+            return False, "59 should be beneficiary, not bank field"
 
     return True, ""
+
+def enrich_party_value_from_evidence(field_key: str, value: str, evidence: str) -> str:
+    if field_key not in PARTY_FIELDS:
+        return value
+
+    rebuilt = extract_party_from_evidence(evidence)
+    if rebuilt:
+        return rebuilt
+    return value
 
 def verify_extraction(extracted: Dict) -> Tuple[Dict, List[str]]:
     verified = {}
@@ -526,18 +563,21 @@ def verify_extraction(extracted: Dict) -> Tuple[Dict, List[str]]:
         reason = ""
 
         if found and value and evidence:
-            if looks_like_example_leak(key, value, evidence):
+            candidate_value = enrich_party_value_from_evidence(key, value, evidence)
+
+            if looks_like_example_leak(key, candidate_value, evidence):
                 reason = "Rejected: example-like value not present in evidence"
-            elif not evidence_supports_value(value, evidence, key):
+            elif not evidence_supports_value(candidate_value, evidence, key):
                 reason = "Rejected: evidence does not support extracted value"
             else:
-                ok, msg = semantic_field_check(key, value)
+                ok, msg = semantic_field_check(key, candidate_value)
                 if not ok:
                     reason = f"Rejected: {msg}"
-                elif confidence < 55 and key not in NARRATIVE_FIELDS:
+                elif confidence < 55 and key not in NARRATIVE_FIELDS and key not in PARTY_FIELDS:
                     reason = "Rejected: confidence below threshold"
                 else:
                     accepted = True
+                    value = candidate_value
         else:
             reason = "Rejected: missing found/value/evidence"
 
@@ -659,7 +699,7 @@ def extraction_table_rows(verified_map: Dict) -> List[Dict]:
 if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
 
-st.markdown('<p class="small-note">Esta versión usa contexto SWIFT MT700 resumido, evidencia literal y validación local dura.</p>', unsafe_allow_html=True)
+st.markdown('<p class="small-note">Esta versión recupera mejor nombre + dirección en 50/59 y evita confundir beneficiario con banco.</p>', unsafe_allow_html=True)
 
 if st.button("🚀 Generar MT700"):
     if not files:
@@ -741,7 +781,7 @@ if st.button("🚀 Generar MT700"):
             st.session_state["mt700"] = mt700
             st.session_state["validation"] = validation
 
-            st.success("✅ Generado con control anti-alucinación y contexto SWIFT")
+            st.success("✅ Generado con control anti-alucinación y recuperación mejorada de parties")
 
         except Exception as e:
             st.error(f"Error durante la ejecución: {e}")
@@ -774,6 +814,6 @@ if "mt700" in st.session_state:
 
     c1, c2 = st.columns(2)
     with c1:
-        st.download_button("⬇️ Descargar MT700 TXT", txt_data, file_name="MT700_ANTI_HALLUCINATION_V61.txt", mime="text/plain")
+        st.download_button("⬇️ Descargar MT700 TXT", txt_data, file_name="MT700_ANTI_HALLUCINATION_V62.txt", mime="text/plain")
     with c2:
-        st.download_button("⬇️ Descargar auditoría JSON", json_data, file_name="MT700_AUDIT_V61.json", mime="application/json")
+        st.download_button("⬇️ Descargar auditoría JSON", json_data, file_name="MT700_AUDIT_V62.json", mime="application/json")
