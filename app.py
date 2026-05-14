@@ -28,8 +28,168 @@ try:
 except Exception:
     pytesseract = None
 
-st.set_page_config(page_title="MT700 Generator v5.3", layout="wide")
-st.title("📡 MT700 Generator - Trade Finance v5.3 (strict mapping + deterministic narrative translation)")
+st.set_page_config(
+    page_title="MT700 Generator v5.4",
+    layout="wide",
+    page_icon="🏦"
+)
+
+SANTANDER_RED = "#EC0000"
+SANTANDER_DARK_RED = "#C00000"
+SANTANDER_LIGHT = "#FFF5F5"
+SANTANDER_BORDER = "#F3C7C7"
+
+st.markdown(f"""
+<style>
+:root {{
+    --santander-red: {SANTANDER_RED};
+    --santander-dark-red: {SANTANDER_DARK_RED};
+    --santander-light: {SANTANDER_LIGHT};
+    --santander-border: {SANTANDER_BORDER};
+}}
+
+.block-container {{
+    padding-top: 1.5rem;
+    padding-bottom: 2rem;
+}}
+
+.main {{
+    background: linear-gradient(180deg, #fff 0%, #fff7f7 100%);
+}}
+
+[data-testid="stMetric"] {{
+    background: white;
+    border: 1px solid var(--santander-border);
+    border-radius: 14px;
+    padding: 14px 18px;
+    box-shadow: 0 4px 18px rgba(236, 0, 0, 0.06);
+}}
+
+[data-testid="stMetric"] label,
+[data-testid="stMetricValue"] {{
+    color: #222 !important;
+}}
+
+.stButton > button,
+.stDownloadButton > button {{
+    background: var(--santander-red);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    padding: 0.6rem 1rem;
+    font-weight: 600;
+}}
+
+.stButton > button:hover,
+.stDownloadButton > button:hover {{
+    background: var(--santander-dark-red);
+    color: white;
+}}
+
+div[data-testid="stExpander"] {{
+    border: 1px solid #f0d6d6;
+    border-radius: 12px;
+    background: #fffdfd;
+    box-shadow: 0 2px 10px rgba(236, 0, 0, 0.04);
+}}
+
+div[data-testid="stExpander"] details summary {{
+    font-weight: 600;
+    color: #5c1111;
+}}
+
+textarea, .stTextArea textarea {{
+    border-radius: 10px !important;
+}}
+
+.stAlert {{
+    border-radius: 12px;
+}}
+
+.mt700-hero {{
+    background: linear-gradient(135deg, {SANTANDER_RED} 0%, #ff3b30 100%);
+    color: white;
+    border-radius: 18px;
+    padding: 22px 24px;
+    margin-bottom: 1rem;
+    box-shadow: 0 12px 30px rgba(236, 0, 0, 0.18);
+}}
+
+.mt700-hero-row {{
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}}
+
+.mt700-logo {{
+    width: 52px;
+    height: 52px;
+    border-radius: 14px;
+    background: rgba(255,255,255,0.14);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(6px);
+    flex-shrink: 0;
+}}
+
+.mt700-logo svg {{
+    width: 34px;
+    height: 34px;
+    fill: white;
+}}
+
+.mt700-title {{
+    font-size: 1.7rem;
+    font-weight: 700;
+    margin: 0;
+    line-height: 1.1;
+}}
+
+.mt700-subtitle {{
+    margin: 0.25rem 0 0 0;
+    opacity: 0.92;
+    font-size: 0.98rem;
+}}
+
+.section-title {{
+    color: {SANTANDER_DARK_RED};
+    font-weight: 700;
+    margin-top: 0.5rem;
+    margin-bottom: 0.35rem;
+}}
+
+.soft-card {{
+    background: white;
+    border: 1px solid var(--santander-border);
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 1rem;
+}}
+
+code {{
+    color: var(--santander-dark-red);
+}}
+</style>
+""", unsafe_allow_html=True)
+
+st.markdown(f"""
+<div class="mt700-hero">
+  <div class="mt700-hero-row">
+    <div class="mt700-logo" aria-hidden="true">
+      <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+        <path d="M34.7 8.5c3.5 5.7 4.7 11.2 3.4 16.1-1 3.8-3.6 6.9-7.1 9.4 1.3-4.7-.2-8.4-3.2-12.4-2.1-2.8-3.6-6-3.1-9.9.6-4.4 3.8-8 10-3.2z"/>
+        <path d="M22.2 37.4c2.8-3.4 6.4-5.8 11-7.1-1.6 2.7-1.2 5.8.2 8.4 1.8 3.3 4.7 6.1 5.8 10.1 1.4 5.1-1.2 8.9-7.5 8.9-8.7 0-14.1-7.5-9.5-20.3z"/>
+        <ellipse cx="31.5" cy="54.5" rx="14.5" ry="4.5"/>
+      </svg>
+    </div>
+    <div>
+      <p class="mt700-title">MT700 Generator</p>
+      <p class="mt700-subtitle">Trade Finance assistant with strict SWIFT mapping, validation and English narrative repair</p>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
@@ -148,19 +308,6 @@ Rules:
 - Keep SWIFT-style concise banking language.
 - Return exactly the same keys you received.
 """
-
-NARRATIVE_TRANSLATION_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "mt700_narrative_translation",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {tag: {"type": "string"} for tag in NARRATIVE_TAGS},
-            "additionalProperties": False
-        }
-    }
-}
 
 SCHEMA = {
     "type": "json_schema",
@@ -469,6 +616,8 @@ def replace_mt700_fields(mt700: str, replacements: Dict[str, str]) -> str:
 if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
 
+st.markdown('<p class="section-title">Input documents</p>', unsafe_allow_html=True)
+
 if st.button("🚀 Generar MT700"):
     if not files:
         st.warning("Sube documentos")
@@ -514,21 +663,21 @@ if st.button("🚀 Generar MT700"):
 
         source_text = "\n\n".join(full_parts)
 
-        st.subheader("🧪 Debug extracción")
-        st.json(debug)
-        st.text_area("Texto fuente", source_text[:5000], height=300)
+        with st.expander("🧪 Debug extracción", expanded=False):
+            st.json(debug)
+            st.text_area("Texto fuente", source_text[:5000], height=300)
 
         user_payload = EXPECTED_GUIDE + "\n\nSOURCE DOCUMENTS:\n" + source_text[:30000]
 
         field_map_raw = call_llm_json(STRUCTURED_EXTRACTION_PROMPT, user_payload, SCHEMA, max_tokens=1600)
         field_map = normalize_field_map(field_map_raw)
 
-        st.subheader("🧪 Tipos del field_map")
-        type_debug = {k: str(type(v)) for k, v in field_map_raw.items()} if isinstance(field_map_raw, dict) else {}
-        st.json(type_debug)
+        with st.expander("🧪 Tipos del field_map", expanded=False):
+            type_debug = {k: str(type(v)) for k, v in field_map_raw.items()} if isinstance(field_map_raw, dict) else {}
+            st.json(type_debug)
 
-        st.subheader("🧩 Field map estructurado")
-        st.json(field_map)
+        with st.expander("🧩 Field map estructurado", expanded=False):
+            st.json(field_map)
 
         seed_mt700 = build_mt700_from_map(field_map)
 
@@ -568,11 +717,7 @@ if st.button("🚀 Generar MT700"):
         st.success("✅ Generado")
 
 if "mt700" in st.session_state:
-    with st.expander("🧪 Debug persistido", expanded=False):
-        st.json(st.session_state.get("field_map_raw", {}))
-        st.json(st.session_state.get("field_map", {}))
-        st.json(st.session_state.get("translated_fields", {}))
-        st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:5000], height=280)
+    st.markdown('<p class="section-title">Result</p>', unsafe_allow_html=True)
 
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -582,8 +727,15 @@ if "mt700" in st.session_state:
         st.json(st.session_state["validation"])
 
     parsed = parse_mt700_fields(edited)
-    st.subheader("🧩 Campos parseados")
-    st.json(parsed)
+
+    with st.expander("🧪 Debug persistido", expanded=False):
+        st.json(st.session_state.get("field_map_raw", {}))
+        st.json(st.session_state.get("field_map", {}))
+        st.json(st.session_state.get("translated_fields", {}))
+        st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:5000], height=280)
+
+    with st.expander("🧩 Campos parseados", expanded=False):
+        st.json(parsed)
 
     txt_data = edited.encode("utf-8")
     json_data = json.dumps({
