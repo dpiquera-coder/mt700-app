@@ -28,8 +28,8 @@ try:
 except Exception:
     pytesseract = None
 
-st.set_page_config(page_title="MT700 Generator v5.2", layout="wide")
-st.title("📡 MT700 Generator - Trade Finance v5.2 (strict mapping + narrative repair)")
+st.set_page_config(page_title="MT700 Generator v5.3", layout="wide")
+st.title("📡 MT700 Generator - Trade Finance v5.3 (strict mapping + deterministic narrative translation)")
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
@@ -47,11 +47,15 @@ FIELD_KEYS = [
     "field_78", "field_72Z"
 ]
 
+NARRATIVE_TAGS = ["45A", "46A", "47A", "71D", "78", "72Z"]
+
 SPANISH_HINT_WORDS = [
     "factura", "conocimiento", "carta de porte", "poliza", "póliza",
     "certificado", "segun", "según", "mercancia", "mercancía",
     "beneficiario", "solicitante", "vencimiento", "ejemplares",
-    "hoja adjunta", "cargador", "consignatario"
+    "hoja adjunta", "cargador", "consignatario",
+    "por correo", "enviar documentos", "gastos bancarios",
+    "fuera de españa", "a cargo del beneficiario"
 ]
 
 EXPECTED_GUIDE = """
@@ -129,23 +133,34 @@ Do not output any disallowed tags.
 Narrative fields must be in English.
 """
 
-NARRATIVE_FIX_PROMPT = """
-You are a senior Trade Finance SWIFT MT700 narrative repair specialist.
+NARRATIVE_TRANSLATION_PROMPT = """
+You are a senior Trade Finance banking translator.
 
-You will receive:
-1. the full MT700
-2. the defective narrative fields
-3. the source document text
-
-Return ONLY the full corrected MT700 in SWIFT format.
+Translate ONLY the provided MT700 narrative field values into professional banking English.
+Return JSON only.
 
 Rules:
-- Correct only the specified narrative fields.
-- Keep all other fields unchanged.
-- Narrative fields must be in professional banking English.
-- Preserve factual content, addresses, references, amounts, dates, bank names and BICs.
-- Do not add or remove SWIFT tags.
+- Input fields are MT700 narrative tags and their current values.
+- Preserve factual content: amounts, percentages, references, addresses, bank names, BICs, dates, phone numbers, company names.
+- Translate wording only.
+- Do not add new facts.
+- Do not omit facts.
+- Keep SWIFT-style concise banking language.
+- Return exactly the same keys you received.
 """
+
+NARRATIVE_TRANSLATION_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "mt700_narrative_translation",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {tag: {"type": "string"} for tag in NARRATIVE_TAGS},
+            "additionalProperties": False
+        }
+    }
+}
 
 SCHEMA = {
     "type": "json_schema",
@@ -188,14 +203,9 @@ def safe_str_value(value) -> str:
         for item in value:
             if item is None:
                 continue
-            if isinstance(item, str):
-                item = item.strip()
-                if item:
-                    parts.append(item)
-            else:
-                item = str(item).strip()
-                if item:
-                    parts.append(item)
+            item = safe_str_value(item)
+            if item:
+                parts.append(item)
         return "\n".join(parts).strip()
     if isinstance(value, dict):
         try:
@@ -387,7 +397,7 @@ def validate_mt700(mt700: str) -> Dict:
     if "59" in fields and re.fullmatch(r"[0-9,\.]+", fields["59"].strip()):
         issues.append(":59: cannot be numeric only")
 
-    for tag in ["45A", "46A", "47A", "71D", "78", "72Z"]:
+    for tag in NARRATIVE_TAGS:
         if tag in fields and contains_spanish_narrative(fields[tag]):
             warnings.append(f":{tag}: contains non-English wording")
 
@@ -406,21 +416,55 @@ def validate_mt700(mt700: str) -> Dict:
         "defective_fields": sorted(set(defective_fields))
     }
 
-def repair_narrative_fields(mt700: str, defective_fields: List[str], source_text: str) -> str:
-    if not defective_fields:
-        return mt700
+def translate_narrative_fields(mt700: str, defective_fields: List[str], source_text: str) -> Dict[str, str]:
+    parsed = parse_mt700_fields(mt700)
+    payload = {}
+    for tag in defective_fields:
+        if tag in parsed and parsed[tag].strip():
+            payload[tag] = parsed[tag]
 
-    repair_input = (
-        "SOURCE DOCUMENTS:\n" + source_text[:30000] +
-        "\n\nCURRENT MT700:\n" + mt700 +
-        "\n\nDEFECTIVE NARRATIVE FIELDS:\n" + ", ".join(defective_fields)
+    if not payload:
+        return {}
+
+    schema = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "mt700_narrative_translation_dynamic",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {tag: {"type": "string"} for tag in payload.keys()},
+                "required": list(payload.keys()),
+                "additionalProperties": False
+            }
+        }
+    }
+
+    user_text = (
+        "SOURCE DOCUMENTS:\n" + source_text[:20000] +
+        "\n\nCURRENT NARRATIVE FIELD VALUES:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
     )
 
-    try:
-        repaired = call_llm_text(NARRATIVE_FIX_PROMPT, repair_input, max_tokens=2200)
-        return repaired.strip() if repaired.strip() else mt700
-    except Exception:
+    translated = call_llm_json(NARRATIVE_TRANSLATION_PROMPT, user_text, schema, max_tokens=1200)
+    return {k: safe_str_value(v) for k, v in translated.items() if k in payload}
+
+def replace_mt700_fields(mt700: str, replacements: Dict[str, str]) -> str:
+    if not replacements:
         return mt700
+
+    pattern = re.compile(r"(?ms)^:([0-9]{2}[A-Z]?):(.*?)(?=^:[0-9]{2}[A-Z]?:|^-}\s*$|\Z)")
+
+    def repl(match):
+        tag = match.group(1)
+        old_value = match.group(2)
+        if tag in replacements and replacements[tag].strip():
+            new_value = replacements[tag].strip()
+            return f":{tag}:{new_value}\n"
+        return f":{tag}:{old_value}"
+
+    result = pattern.sub(repl, mt700)
+    result = re.sub(r"\n-}$", "\n-}", result)
+    return result
 
 if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
@@ -502,20 +546,23 @@ if st.button("🚀 Generar MT700"):
 
         narrative_problem_fields = [
             f for f in validation.get("defective_fields", [])
-            if f in ["45A", "46A", "47A", "71D", "78", "72Z"]
+            if f in NARRATIVE_TAGS
         ]
 
+        translated_fields = {}
         if narrative_problem_fields:
-            repaired_mt700 = repair_narrative_fields(mt700, narrative_problem_fields, source_text)
-            repaired_validation = validate_mt700(repaired_mt700)
+            translated_fields = translate_narrative_fields(mt700, narrative_problem_fields, source_text)
+            mt700_repaired = replace_mt700_fields(mt700, translated_fields)
+            repaired_validation = validate_mt700(mt700_repaired)
 
             if repaired_validation["score"] >= validation["score"]:
-                mt700 = repaired_mt700
+                mt700 = mt700_repaired
                 validation = repaired_validation
 
         st.session_state["source_text"] = source_text
         st.session_state["field_map"] = field_map
         st.session_state["field_map_raw"] = field_map_raw
+        st.session_state["translated_fields"] = translated_fields
         st.session_state["mt700"] = mt700
         st.session_state["validation"] = validation
         st.success("✅ Generado")
@@ -524,6 +571,7 @@ if "mt700" in st.session_state:
     with st.expander("🧪 Debug persistido", expanded=False):
         st.json(st.session_state.get("field_map_raw", {}))
         st.json(st.session_state.get("field_map", {}))
+        st.json(st.session_state.get("translated_fields", {}))
         st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:5000], height=280)
 
     col1, col2 = st.columns([2, 1])
@@ -541,6 +589,7 @@ if "mt700" in st.session_state:
     json_data = json.dumps({
         "field_map_raw": st.session_state["field_map_raw"],
         "field_map": st.session_state["field_map"],
+        "translated_fields": st.session_state.get("translated_fields", {}),
         "validation": st.session_state["validation"],
         "parsed_fields": parsed
     }, ensure_ascii=False, indent=2).encode("utf-8")
