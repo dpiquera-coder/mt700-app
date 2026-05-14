@@ -32,7 +32,7 @@ except Exception:
 
 
 st.set_page_config(
-    page_title="MT700 Generator Anti-Hallucination v6.6",
+    page_title="MT700 Generator Anti-Hallucination v6.8",
     layout="wide",
     page_icon="🏦"
 )
@@ -106,7 +106,7 @@ textarea, .stTextArea textarea {{
 st.markdown("""
 <div class="mt700-hero">
   <p class="mt700-title">MT700 Generator</p>
-  <p class="mt700-subtitle">Narrative extraction + direct OCR MT700 parsing + field descriptions in audit and validation</p>
+  <p class="mt700-subtitle">OCR MT700 + narrativa + auditoría explicativa + interpretación genérica de checkboxes</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -142,110 +142,32 @@ FIELD_TO_TAG = {
 TAG_TO_FIELD = {v: k for k, v in FIELD_TO_TAG.items()}
 
 FIELD_METADATA = {
-    "field_27": {
-        "name": "Sequence of Total",
-        "description": "Número de mensaje dentro de la serie total del crédito, por ejemplo 1/1."
-    },
-    "field_20": {
-        "name": "Documentary Credit Number",
-        "description": "Referencia única del crédito documentario asignada por el emisor."
-    },
-    "field_40A": {
-        "name": "Form of Documentary Credit",
-        "description": "Indica la forma del crédito, por ejemplo si es irrevocable."
-    },
-    "field_40E": {
-        "name": "Applicable Rules",
-        "description": "Reglas aplicables al crédito, por ejemplo UCP o eUCP."
-    },
-    "field_31C": {
-        "name": "Date of Issue",
-        "description": "Fecha en la que el crédito es emitido por el banco emisor."
-    },
-    "field_31D": {
-        "name": "Date and Place of Expiry",
-        "description": "Fecha y lugar donde expira el crédito documentario."
-    },
-    "field_50": {
-        "name": "Applicant",
-        "description": "Ordenante o solicitante del crédito, normalmente nombre y dirección."
-    },
-    "field_59": {
-        "name": "Beneficiary",
-        "description": "Beneficiario del crédito, normalmente nombre y dirección."
-    },
-    "field_32B": {
-        "name": "Currency Code, Amount",
-        "description": "Divisa e importe del crédito."
-    },
-    "field_39A": {
-        "name": "Percentage Credit Amount Tolerance",
-        "description": "Tolerancia permitida sobre el importe del crédito, por ejemplo 10/10."
-    },
-    "field_41A": {
-        "name": "Available With... By...",
-        "description": "Banco con el que está disponible el crédito y forma de utilización, por ejemplo BY PAYMENT."
-    },
-    "field_42C": {
-        "name": "Drafts at",
-        "description": "Condición o tenor de la letra, si aplica."
-    },
-    "field_43P": {
-        "name": "Partial Shipments",
-        "description": "Indica si se permiten expediciones parciales."
-    },
-    "field_43T": {
-        "name": "Transhipment",
-        "description": "Indica si se permite transbordo."
-    },
-    "field_44E": {
-        "name": "Port of Loading / Airport of Departure",
-        "description": "Puerto de carga o aeropuerto de salida."
-    },
-    "field_44F": {
-        "name": "Port of Discharge / Airport of Destination",
-        "description": "Puerto de descarga o aeropuerto de destino."
-    },
-    "field_44C": {
-        "name": "Latest Date of Shipment",
-        "description": "Última fecha permitida de embarque."
-    },
-    "field_45A": {
-        "name": "Description of Goods and/or Services",
-        "description": "Descripción de la mercancía o servicios cubiertos por el crédito."
-    },
-    "field_46A": {
-        "name": "Documents Required",
-        "description": "Documentos que deben presentarse bajo el crédito."
-    },
-    "field_47A": {
-        "name": "Additional Conditions",
-        "description": "Condiciones adicionales aplicables al crédito."
-    },
-    "field_48": {
-        "name": "Period for Presentation",
-        "description": "Número de días dentro de los cuales deben presentarse los documentos."
-    },
-    "field_49": {
-        "name": "Confirmation Instructions",
-        "description": "Instrucciones de confirmación para el banco receptor."
-    },
-    "field_57A": {
-        "name": "Advise Through Bank / Second Advising Bank",
-        "description": "Banco a través del cual se avisa el crédito o segundo banco avisador."
-    },
-    "field_71D": {
-        "name": "Charges",
-        "description": "Quién asume los gastos y comisiones bancarias."
-    },
-    "field_78": {
-        "name": "Instructions to the Paying/Accepting/Negotiating Bank",
-        "description": "Instrucciones al banco pagador, aceptante o negociador."
-    },
-    "field_72Z": {
-        "name": "Sender to Receiver Information",
-        "description": "Información adicional del emisor al receptor."
-    }
+    "field_27": {"name": "Sequence of Total", "description": "Número de mensaje dentro de la serie total del crédito, por ejemplo 1/1."},
+    "field_20": {"name": "Documentary Credit Number", "description": "Referencia única del crédito documentario asignada por el emisor."},
+    "field_40A": {"name": "Form of Documentary Credit", "description": "Indica la forma del crédito, por ejemplo si es irrevocable."},
+    "field_40E": {"name": "Applicable Rules", "description": "Reglas aplicables al crédito, por ejemplo UCP o eUCP."},
+    "field_31C": {"name": "Date of Issue", "description": "Fecha en la que el crédito es emitido por el banco emisor."},
+    "field_31D": {"name": "Date and Place of Expiry", "description": "Fecha y lugar donde expira el crédito documentario."},
+    "field_50": {"name": "Applicant", "description": "Ordenante o solicitante del crédito, normalmente nombre y dirección."},
+    "field_59": {"name": "Beneficiary", "description": "Beneficiario del crédito, normalmente nombre y dirección."},
+    "field_32B": {"name": "Currency Code, Amount", "description": "Divisa e importe del crédito."},
+    "field_39A": {"name": "Percentage Credit Amount Tolerance", "description": "Tolerancia permitida sobre el importe del crédito, por ejemplo 10/10."},
+    "field_41A": {"name": "Available With... By...", "description": "Banco con el que está disponible el crédito y forma de utilización, por ejemplo BY PAYMENT."},
+    "field_42C": {"name": "Drafts at", "description": "Condición o tenor de la letra, si aplica."},
+    "field_43P": {"name": "Partial Shipments", "description": "Indica si se permiten expediciones parciales."},
+    "field_43T": {"name": "Transhipment", "description": "Indica si se permite transbordo."},
+    "field_44E": {"name": "Port of Loading / Airport of Departure", "description": "Puerto de carga o aeropuerto de salida."},
+    "field_44F": {"name": "Port of Discharge / Airport of Destination", "description": "Puerto de descarga o aeropuerto de destino."},
+    "field_44C": {"name": "Latest Date of Shipment", "description": "Última fecha permitida de embarque."},
+    "field_45A": {"name": "Description of Goods and/or Services", "description": "Descripción de la mercancía o servicios cubiertos por el crédito."},
+    "field_46A": {"name": "Documents Required", "description": "Documentos que deben presentarse bajo el crédito."},
+    "field_47A": {"name": "Additional Conditions", "description": "Condiciones adicionales aplicables al crédito."},
+    "field_48": {"name": "Period for Presentation", "description": "Número de días dentro de los cuales deben presentarse los documentos."},
+    "field_49": {"name": "Confirmation Instructions", "description": "Instrucciones de confirmación para el banco receptor."},
+    "field_57A": {"name": "Advise Through Bank / Second Advising Bank", "description": "Banco a través del cual se avisa el crédito o segundo banco avisador."},
+    "field_71D": {"name": "Charges", "description": "Quién asume los gastos y comisiones bancarias."},
+    "field_78": {"name": "Instructions to the Paying/Accepting/Negotiating Bank", "description": "Instrucciones al banco pagador, aceptante o negociador."},
+    "field_72Z": {"name": "Sender to Receiver Information", "description": "Información adicional del emisor al receptor."}
 }
 
 NARRATIVE_FIELDS = {"field_45A", "field_46A", "field_47A", "field_71D", "field_78", "field_72Z"}
@@ -276,13 +198,15 @@ VALID_41A_CODES = {
     "BY PAYMENT"
 }
 
+VALID_43_CODES = {"ALLOWED", "CONDITIONAL", "NOT ALLOWED"}
+
 EXAMPLE_LIKE_VALUES = {
     "field_27": {"1/1"},
     "field_40A": VALID_40A_CODES,
     "field_40E": VALID_40E_CODES,
-    "field_39A": {"10/10"},
-    "field_43P": {"ALLOWED", "NOT ALLOWED"},
-    "field_43T": {"ALLOWED", "NOT ALLOWED"},
+    "field_39A": {"10/10", "5/5"},
+    "field_43P": VALID_43_CODES,
+    "field_43T": VALID_43_CODES,
     "field_48": {"21", "21/AFTER SHIPMENT DATE"},
     "field_49": VALID_49_CODES
 }
@@ -316,6 +240,7 @@ SPANISH_TO_ENGLISH_REPLACEMENTS = {
     "GASTOS BANCARIOS": "BANKING CHARGES",
     "FUERA DE ESPAÑA": "OUTSIDE SPAIN",
     "A CARGO DEL BENEFICIARIO": "FOR BENEFICIARY'S ACCOUNT",
+    "A CARGO DEL ORDENANTE": "FOR APPLICANT'S ACCOUNT",
     "EMITIDO POR": "ISSUED BY",
     "A FAVOR DE": "IN FAVOUR OF",
     "SI HUBIERA": "IF ANY",
@@ -342,7 +267,11 @@ Authoritative MT700 structural context:
 - Field 40A valid code values are restricted.
 - Field 40E valid rules code values are restricted.
 - Field 41A includes a BIC or bank identifier plus one valid BY code.
+- Field 43P valid codes are ALLOWED, CONDITIONAL, NOT ALLOWED.
+- Field 43T valid codes are ALLOWED, CONDITIONAL, NOT ALLOWED.
 - Field 48 is period for presentation in days.
+- Field 46A is narrative documents required.
+- Field 71D is narrative charges clause.
 - The absence of field 48 means the presentation period is 21 days, where applicable.
 - Field 49 contains confirmation instructions and only valid codes are CONFIRM, MAY ADD, WITHOUT.
 
@@ -377,6 +306,7 @@ Strict rules:
 - For field_59, never return an advising bank or available-with bank unless source clearly identifies the bank itself as beneficiary.
 - For field_57A and field_41A, prefer bank/BIC content.
 - For 40A and 40E, output only valid SWIFT codes supported by evidence.
+- For 43P and 43T, output only ALLOWED, CONDITIONAL, or NOT ALLOWED if supported.
 - For 49, output only CONFIRM, MAY ADD, or WITHOUT if supported.
 - Never create values from examples or defaults.
 """
@@ -408,6 +338,7 @@ ORIGIN_INFERRED = "INFERRED_FROM_CONTEXT"
 ORIGIN_SYSTEM_DEFAULT = "SYSTEM_DEFAULT"
 ORIGIN_OPERATIONAL_DEFAULT = "OPERATIONAL_DEFAULT"
 ORIGIN_DIRECT_OCR_MT700 = "DIRECT_OCR_MT700"
+ORIGIN_CHECKBOX_INFERRED = "CHECKBOX_INFERRED"
 
 
 def tesseract_available():
@@ -454,6 +385,60 @@ def clean_value(text):
     result = re.sub(r"[ ]{2,}", " ", result)
     result = re.sub(r" *\n *", "\n", result)
     return result.strip()
+
+
+def normalize_ocr_separators(text):
+    t = to_upper(text)
+    t = t.replace("☒", " X ").replace("☑", " X ").replace("[X]", " X ").replace("(X)", " X ")
+    t = re.sub(r"[|]+", " ", t)
+    t = re.sub(r"[/]{2,}", " ", t)
+    t = re.sub(r"\s*:\s*", " : ", t)
+    t = re.sub(r"\s*-\s*", " - ", t)
+    t = re.sub(r"\s{2,}", " ", t)
+    return t.strip()
+
+
+def normalize_checkbox_line(text):
+    return normalize_ocr_separators(text)
+
+
+def collect_lines(text):
+    return [normalize_checkbox_line(ln) for ln in text.splitlines() if ln.strip()]
+
+
+def line_has_marker_near_label(line, label, max_distance=18):
+    l = normalize_checkbox_line(line)
+    if label not in l:
+        return False
+    label_pos = l.find(label)
+    x_positions = [m.start() for m in re.finditer(r"\bX\b", l)]
+    if not x_positions:
+        return False
+    return any(abs(x - label_pos) <= max_distance for x in x_positions)
+
+
+def nearest_marked_option(line, labels):
+    l = normalize_checkbox_line(line)
+    x_positions = [m.start() for m in re.finditer(r"\bX\b", l)]
+    if not x_positions:
+        return ""
+
+    best_label = ""
+    best_dist = 10**9
+
+    for label in labels:
+        start = 0
+        while True:
+            idx = l.find(label, start)
+            if idx == -1:
+                break
+            dist = min(abs(idx - x) for x in x_positions)
+            if dist < best_dist:
+                best_dist = dist
+                best_label = label
+            start = idx + len(label)
+
+    return best_label if best_dist <= 24 else ""
 
 
 def extract_doc_legacy(data):
@@ -669,17 +654,10 @@ def semantic_field_check(field_key, value):
         ok_code = any(code in v for code in VALID_41A_CODES)
         if not ok_code:
             return False, "41A invalid availability code"
-        bic_candidate = v.split("BY ")[0].strip()
-        if bic_candidate and not re.fullmatch(r"[A-Z0-9]{8,11}", bic_candidate):
-            return False, "41A invalid BIC format"
 
-    elif field_key == "field_43P":
-        if v not in {"ALLOWED", "NOT ALLOWED"}:
-            return False, "43P invalid"
-
-    elif field_key == "field_43T":
-        if v not in {"ALLOWED", "NOT ALLOWED"}:
-            return False, "43T invalid"
+    elif field_key in {"field_43P", "field_43T"}:
+        if v not in VALID_43_CODES:
+            return False, f"{FIELD_TO_TAG[field_key]} invalid code"
 
     elif field_key == "field_48":
         if "%" in v:
@@ -799,6 +777,111 @@ def merge_direct_ocr_into_extraction(extracted, source_text):
     return extracted, direct
 
 
+def infer_payment_method_from_checkboxes(source_text):
+    lines = collect_lines(source_text)
+    for line in lines:
+        if "PAGO" in line or "ACEPTACION" in line or "NEGOCIACION" in line or "PAGO DIFERIDO" in line:
+            chosen = nearest_marked_option(line, ["PAGO DIFERIDO", "NEGOCIACION", "ACEPTACION", "PAGO"])
+            if chosen == "PAGO":
+                return "BY PAYMENT"
+            if chosen == "ACEPTACION":
+                return "BY ACCEPTANCE"
+            if chosen == "NEGOCIACION":
+                return "BY NEGOTIATION"
+            if chosen == "PAGO DIFERIDO":
+                return "BY DEF PAYMENT"
+    return ""
+
+
+def infer_tolerance_from_checkboxes(source_text):
+    lines = collect_lines(source_text)
+    for line in lines:
+        if "10%" in line and "X" in line and ("ACCEPTABLE" in line or "TOLER" in line or "+/-" in line):
+            return "10/10"
+        if "5%" in line and "X" in line and ("ACCEPTABLE" in line or "TOLER" in line or "+/-" in line):
+            return "5/5"
+    return ""
+
+
+def infer_checkbox_selection_for_43p(text):
+    lines = collect_lines(text)
+    for line in lines:
+        if "EXPEDICIONES PARCIALES" not in line and "PARTIAL SHIPMENT" not in line and "PARTIAL SHIPMENTS" not in line:
+            continue
+
+        chosen = nearest_marked_option(line, ["AUTORIZADAS", "PROHIBIDAS", "CONDICIONALES"])
+        if chosen == "AUTORIZADAS":
+            return "ALLOWED"
+        if chosen == "PROHIBIDAS":
+            return "NOT ALLOWED"
+        if chosen == "CONDICIONALES":
+            return "CONDITIONAL"
+    return ""
+
+
+def infer_checkbox_selection_for_43t(text):
+    lines = collect_lines(text)
+    for line in lines:
+        if "TRANSBORDOS" not in line and "TRANSHIPMENT" not in line and "TRANSHIPMENTS" not in line:
+            continue
+
+        chosen = nearest_marked_option(line, ["PERMITIDOS", "PROHIBIDOS", "CONDICIONALES"])
+        if chosen == "PERMITIDOS":
+            return "ALLOWED"
+        if chosen == "PROHIBIDOS":
+            return "NOT ALLOWED"
+        if chosen == "CONDICIONALES":
+            return "CONDITIONAL"
+    return ""
+
+
+def infer_checked_documents_for_46A(source_text):
+    docs = []
+    lines = collect_lines(source_text)
+
+    for line in lines:
+        if "FACTURA COMERCIAL" in line and line_has_marker_near_label(line, "FACTURA COMERCIAL"):
+            docs.append("SIGNED COMMERCIAL INVOICE IN 3 COPIES")
+        elif "FULL SET CLEAN ON BOARD BILL OF LADING" in line and "X" in line:
+            docs.append("FULL SET CLEAN ON BOARD BILL OF LADING PLUS 3 NON NEGOTIABLE COPIES")
+        elif ("POLIZA" in line or "CERTIFICADO DE SEGURO" in line or "SEGURO" in line) and "X" in line:
+            docs.append("INSURANCE POLICY OR CERTIFICATE")
+        elif "CERTIFICADO DE ORIGEN" in line and "X" in line:
+            docs.append("CERTIFICATE OF ORIGIN ISSUED BY COMPETENT AUTHORITIES")
+        elif ("CERTIFICADO DE INSPECCION" in line or "CERTIFICADO DE INSPECCIÓN" in line) and "X" in line:
+            docs.append("INSPECTION CERTIFICATE")
+        elif ("LISTA DE CONTENIDO" in line or "PACKING LIST" in line) and "X" in line:
+            docs.append("PACKING LIST IN 3 COPIES")
+        elif ('FORM "A"' in line or "FORM A" in line) and "X" in line:
+            docs.append('FORM "A" AS PER ATTACHED SHEET')
+        elif "CONOCIMIENTO AEREO" in line and "X" in line:
+            docs.append("AIR WAYBILL")
+        elif "CMR" in line and "X" in line:
+            docs.append("INTERNATIONAL ROAD WAYBILL (CMR)")
+        elif "CIM" in line and "X" in line:
+            docs.append("RAIL WAYBILL (CIM)")
+
+    deduped = []
+    seen = set()
+    for d in docs:
+        if d not in seen:
+            deduped.append(d)
+            seen.add(d)
+    return deduped
+
+
+def infer_field_71D_from_checkboxes(source_text):
+    lines = collect_lines(source_text)
+    for line in lines:
+        if "BENEFICIARIO" in line and "ORDENANTE" in line:
+            chosen = nearest_marked_option(line, ["BENEFICIARIO", "ORDENANTE"])
+            if chosen == "BENEFICIARIO":
+                return "ALL BANKING CHARGES OUTSIDE SPAIN ARE FOR BENEFICIARY'S ACCOUNT"
+            if chosen == "ORDENANTE":
+                return "ALL BANKING CHARGES OUTSIDE SPAIN ARE FOR APPLICANT'S ACCOUNT"
+    return ""
+
+
 def infer_field_20_from_text(source_text):
     t = to_upper(source_text)
     patterns_priority = [
@@ -891,7 +974,6 @@ def infer_field_32B_from_text(source_text):
             ccy, amt = g1, g2
         else:
             amt, ccy = g1, g2
-
         candidate = f"{ccy}{normalize_amount_for_32B(amt)}"
         ok, _ = semantic_field_check("field_32B", candidate)
         if ok:
@@ -916,6 +998,24 @@ def infer_field_39A_from_text(source_text):
             ok, _ = semantic_field_check("field_39A", candidate)
             if ok:
                 return candidate
+
+    checkbox_candidate = infer_tolerance_from_checkboxes(source_text)
+    if checkbox_candidate:
+        return checkbox_candidate
+
+    return ""
+
+
+def infer_bic_from_text(source_text):
+    t = to_upper(source_text)
+    patterns = [
+        r"\b([A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?)\b"
+    ]
+    for p in patterns:
+        for m in re.finditer(p, t):
+            bic = m.group(1)
+            if len(bic) in (8, 11):
+                return bic
     return ""
 
 
@@ -933,11 +1033,17 @@ def infer_field_41A_from_text(source_text):
             if ok:
                 return candidate
 
+    checkbox_method = infer_payment_method_from_checkboxes(source_text)
+    if checkbox_method:
+        bic = infer_bic_from_text(source_text)
+        if bic:
+            candidate = f"{bic} {checkbox_method}"
+            ok, _ = semantic_field_check("field_41A", candidate)
+            if ok:
+                return candidate
+
     if "A LA VISTA" in t or "AT SIGHT" in t:
-        bic = ""
-        m = re.search(r"\b(BSCH[A-Z0-9]{7})\b", t)
-        if m:
-            bic = m.group(1)
+        bic = infer_bic_from_text(source_text)
         if bic:
             candidate = f"{bic} BY PAYMENT"
             ok, _ = semantic_field_check("field_41A", candidate)
@@ -947,20 +1053,76 @@ def infer_field_41A_from_text(source_text):
 
 
 def infer_field_43P_from_text(source_text):
-    t = to_upper(source_text)
-    if re.search(r"\b43P\s*[: ]\s*ALLOWED\b", t) or "EXPEDICIONES PARCIALES X AUTORIZADAS" in t:
-        return "ALLOWED"
-    if re.search(r"\b43P\s*[: ]\s*NOT ALLOWED\b", t) or "EXPEDICIONES PARCIALES PROHIBIDAS" in t:
-        return "NOT ALLOWED"
+    t = normalize_ocr_separators(source_text)
+
+    allowed_patterns = [
+        r"\b43P\s*[: ]\s*ALLOWED\b",
+        r"\bPARTIAL\s+SHIPMENTS?\s*[:/\-|]?\s*ALLOWED\b",
+        r"\bEXPEDICIONES?\s+PARCIALES?\s*[:/\-|]?\s*AUTORIZADAS?\b"
+    ]
+    not_allowed_patterns = [
+        r"\b43P\s*[: ]\s*NOT ALLOWED\b",
+        r"\bPARTIAL\s+SHIPMENTS?\s*[:/\-|]?\s*NOT ALLOWED\b",
+        r"\bEXPEDICIONES?\s+PARCIALES?\s*[:/\-|]?\s*PROHIBIDAS?\b",
+        r"\bEXPEDICIONES?\s+PARCIALES?\s*[:/\-|]?\s*NO\s+AUTORIZADAS?\b"
+    ]
+    conditional_patterns = [
+        r"\b43P\s*[: ]\s*CONDITIONAL\b",
+        r"\bPARTIAL\s+SHIPMENTS?\s*[:/\-|]?\s*CONDITIONAL\b",
+        r"\bEXPEDICIONES?\s+PARCIALES?\s*[:/\-|]?\s*CONDICIONALES?\b"
+    ]
+
+    for p in allowed_patterns:
+        if re.search(p, t):
+            return "ALLOWED"
+    for p in not_allowed_patterns:
+        if re.search(p, t):
+            return "NOT ALLOWED"
+    for p in conditional_patterns:
+        if re.search(p, t):
+            return "CONDITIONAL"
+
+    checkbox_value = infer_checkbox_selection_for_43p(t)
+    if checkbox_value:
+        return checkbox_value
+
     return ""
 
 
 def infer_field_43T_from_text(source_text):
-    t = to_upper(source_text)
-    if re.search(r"\b43T\s*[: ]\s*ALLOWED\b", t) or "TRANSBORDOS PERMITIDOS" in t:
-        return "ALLOWED"
-    if re.search(r"\b43T\s*[: ]\s*NOT ALLOWED\b", t) or "TRANSBORDOS PROHIBIDOS" in t:
-        return "NOT ALLOWED"
+    t = normalize_ocr_separators(source_text)
+
+    allowed_patterns = [
+        r"\b43T\s*[: ]\s*ALLOWED\b",
+        r"\bTRANSBORDOS?\s*[:/\-|]?\s*PERMITIDOS?\b",
+        r"\bTRANSHIPMENTS?\s*[:/\-|]?\s*ALLOWED\b"
+    ]
+    not_allowed_patterns = [
+        r"\b43T\s*[: ]\s*NOT ALLOWED\b",
+        r"\bTRANSBORDOS?\s*[:/\-|]?\s*PROHIBIDOS?\b",
+        r"\bTRANSBORDOS?\s*[:/\-|]?\s*NO\s+PERMITIDOS?\b",
+        r"\bTRANSHIPMENTS?\s*[:/\-|]?\s*NOT ALLOWED\b"
+    ]
+    conditional_patterns = [
+        r"\b43T\s*[: ]\s*CONDITIONAL\b",
+        r"\bTRANSBORDOS?\s*[:/\-|]?\s*CONDICIONALES?\b",
+        r"\bTRANSHIPMENTS?\s*[:/\-|]?\s*CONDITIONAL\b"
+    ]
+
+    for p in allowed_patterns:
+        if re.search(p, t):
+            return "ALLOWED"
+    for p in not_allowed_patterns:
+        if re.search(p, t):
+            return "NOT ALLOWED"
+    for p in conditional_patterns:
+        if re.search(p, t):
+            return "CONDITIONAL"
+
+    checkbox_value = infer_checkbox_selection_for_43t(t)
+    if checkbox_value:
+        return checkbox_value
+
     return ""
 
 
@@ -1012,6 +1174,13 @@ def infer_field_44C_from_text(source_text):
     return ""
 
 
+def infer_field_46A_from_checkboxes(source_text):
+    docs = infer_checked_documents_for_46A(source_text)
+    if not docs:
+        return ""
+    return "\n".join(f"+ {d}" for d in docs)
+
+
 def infer_mt700_defaults(source_text, verified_map):
     t = to_upper(source_text)
     inferred = {}
@@ -1031,6 +1200,8 @@ def infer_mt700_defaults(source_text, verified_map):
         "field_44E": infer_field_44E_from_text,
         "field_44F": infer_field_44F_from_text,
         "field_44C": infer_field_44C_from_text,
+        "field_46A": infer_field_46A_from_checkboxes,
+        "field_71D": infer_field_71D_from_checkboxes,
     }
 
     for field_key, fn in infer_map.items():
@@ -1039,8 +1210,8 @@ def infer_mt700_defaults(source_text, verified_map):
             if value:
                 inferred[field_key] = {
                     "value": value,
-                    "reason": f"Recovered from source text for {field_key}",
-                    "origin": ORIGIN_INFERRED
+                    "reason": f"Recovered from source text / checkbox logic for {field_key}",
+                    "origin": ORIGIN_CHECKBOX_INFERRED if field_key in {"field_39A", "field_41A", "field_43P", "field_43T", "field_46A", "field_71D"} else ORIGIN_INFERRED
                 }
 
     if not verified_map["field_40A"]["accepted"] and has_lc_context:
@@ -1106,11 +1277,19 @@ def infer_mt700_defaults(source_text, verified_map):
                 "origin": ORIGIN_INFERRED
             }
         else:
-            inferred["field_48"] = {
-                "value": "21",
-                "reason": "Default presentation period when absent",
-                "origin": ORIGIN_SYSTEM_DEFAULT
-            }
+            m2 = re.search(r"DENTRO DE LOS\s+(\d{1,3})\s+D[IÍ]AS", t)
+            if m2:
+                inferred["field_48"] = {
+                    "value": m2.group(1),
+                    "reason": "Recovered from source presentation period wording",
+                    "origin": ORIGIN_INFERRED
+                }
+            else:
+                inferred["field_48"] = {
+                    "value": "21",
+                    "reason": "Default presentation period when absent",
+                    "origin": ORIGIN_SYSTEM_DEFAULT
+                }
 
     return inferred
 
@@ -1124,7 +1303,7 @@ def apply_inferred_defaults(verified_map, inferred):
 
         value = meta["value"]
         ok, msg = semantic_field_check(key, value)
-        if not ok:
+        if not ok and key not in {"field_46A", "field_71D"}:
             audit.append(f"{key}: inferred/default value rejected: {msg}")
             continue
 
@@ -1165,7 +1344,7 @@ def verify_extraction(extracted, source_text):
                 reason = "Rejected: evidence does not support extracted value"
             else:
                 ok, msg = semantic_field_check(key, candidate_value)
-                if not ok:
+                if not ok and key not in NARRATIVE_FIELDS and key not in PARTY_FIELDS:
                     reason = f"Rejected: {msg}"
                 elif confidence < 55 and key not in NARRATIVE_FIELDS and key not in PARTY_FIELDS and origin != ORIGIN_DIRECT_OCR_MT700:
                     reason = "Rejected: confidence below threshold"
@@ -1210,7 +1389,7 @@ def rewrite_supported_narratives(verified_map):
     payload = {}
     for key in NARRATIVE_FIELDS:
         item = verified_map.get(key, {})
-        if item.get("accepted") and item.get("value") and (item.get("evidence") or item.get("origin") == ORIGIN_DIRECT_OCR_MT700):
+        if item.get("accepted") and item.get("value") and (item.get("evidence") or item.get("origin") in {ORIGIN_DIRECT_OCR_MT700, ORIGIN_CHECKBOX_INFERRED, ORIGIN_INFERRED, ORIGIN_SYSTEM_DEFAULT}):
             payload[key] = {
                 "value": item["value"],
                 "evidence": item.get("evidence", item["value"])
@@ -1333,7 +1512,7 @@ if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
 
 st.markdown(
-    '<p class="small-note">Versión v6.6: OCR MT700, validación anti-alucinación, defaults auditados y descripción funcional del campo en auditoría/validación.</p>',
+    '<p class="small-note">Versión v6.8: parser OCR-MT700, auditoría explicativa y framework genérico de checkboxes para 41A/39A/43P/43T/46A/71D.</p>',
     unsafe_allow_html=True
 )
 
@@ -1425,7 +1604,7 @@ if st.button("🚀 Generar MT700"):
             st.session_state["validation"] = validation
             st.session_state["direct_ocr_map"] = direct_ocr_map
 
-            st.success("✅ Generado con parser OCR-MT700, control anti-alucinación, fallbacks auditados y descripciones funcionales")
+            st.success("✅ Generado con parser OCR-MT700, control anti-alucinación y framework de checkboxes")
 
         except Exception as e:
             st.error(f"Error durante la ejecución: {e}")
@@ -1463,13 +1642,13 @@ if "mt700" in st.session_state:
         st.download_button(
             "⬇️ Descargar MT700 TXT",
             txt_data,
-            file_name="MT700_ANTI_HALLUCINATION_V66.txt",
+            file_name="MT700_ANTI_HALLUCINATION_V68.txt",
             mime="text/plain"
         )
     with c2:
         st.download_button(
             "⬇️ Descargar auditoría JSON",
             json_data,
-            file_name="MT700_AUDIT_V66.json",
+            file_name="MT700_AUDIT_V68.json",
             mime="application/json"
         )
