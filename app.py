@@ -32,7 +32,7 @@ except Exception:
 
 
 st.set_page_config(
-    page_title="MT700 Generator Anti-Hallucination v6.8",
+    page_title="MT700 Generator Anti-Hallucination v6.9",
     layout="wide",
     page_icon="🏦"
 )
@@ -106,7 +106,7 @@ textarea, .stTextArea textarea {{
 st.markdown("""
 <div class="mt700-hero">
   <p class="mt700-title">MT700 Generator</p>
-  <p class="mt700-subtitle">OCR MT700 + narrativa + auditoría explicativa + interpretación genérica de checkboxes</p>
+  <p class="mt700-subtitle">OCR MT700 + narrativa + auditoría explicativa + interpretación reforzada de checkboxes</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -439,6 +439,51 @@ def nearest_marked_option(line, labels):
             start = idx + len(label)
 
     return best_label if best_dist <= 24 else ""
+
+
+def normalize_checkbox_text(text):
+    t = to_upper(text)
+    t = t.replace("☒", " X ").replace("☑", " X ").replace("[X]", " X ").replace("(X)", " X ")
+    t = re.sub(r"[|]+", " ", t)
+    t = re.sub(r"\s*:\s*", " : ", t)
+    t = re.sub(r"\s*-\s*", " - ", t)
+    t = re.sub(r"\s{2,}", " ", t)
+    return t.strip()
+
+
+def extract_context_window(text, anchor_pattern, window=220):
+    t = normalize_checkbox_text(text)
+    m = re.search(anchor_pattern, t, re.I)
+    if not m:
+        return ""
+    start = max(0, m.start() - 30)
+    end = min(len(t), m.end() + window)
+    return t[start:end]
+
+
+def nearest_marked_option_in_window(window_text, labels, max_distance=42):
+    w = normalize_checkbox_text(window_text)
+    x_positions = [m.start() for m in re.finditer(r"\bX\b", w)]
+    if not x_positions:
+        return ""
+
+    best_label = ""
+    best_dist = 10**9
+
+    for label in labels:
+        label_u = to_upper(label)
+        start = 0
+        while True:
+            idx = w.find(label_u, start)
+            if idx == -1:
+                break
+            dist = min(abs(idx - x) for x in x_positions)
+            if dist < best_dist:
+                best_dist = dist
+                best_label = label_u
+            start = idx + len(label_u)
+
+    return best_label if best_label and best_dist <= max_distance else ""
 
 
 def extract_doc_legacy(data):
@@ -778,44 +823,115 @@ def merge_direct_ocr_into_extraction(extracted, source_text):
 
 
 def infer_payment_method_from_checkboxes(source_text):
-    lines = collect_lines(source_text)
-    for line in lines:
-        if "PAGO" in line or "ACEPTACION" in line or "NEGOCIACION" in line or "PAGO DIFERIDO" in line:
-            chosen = nearest_marked_option(line, ["PAGO DIFERIDO", "NEGOCIACION", "ACEPTACION", "PAGO"])
-            if chosen == "PAGO":
-                return "BY PAYMENT"
-            if chosen == "ACEPTACION":
-                return "BY ACCEPTANCE"
-            if chosen == "NEGOCIACION":
-                return "BY NEGOTIATION"
-            if chosen == "PAGO DIFERIDO":
-                return "BY DEF PAYMENT"
+    windows = [
+        extract_context_window(
+            source_text,
+            r"CR[EÉ]DITO UTILIZABLE EN LAS CAJAS DE.*?PARA",
+            window=180
+        ),
+        extract_context_window(
+            source_text,
+            r"PARA\s+X\s+PAGO",
+            window=120
+        ),
+        extract_context_window(
+            source_text,
+            r"PAGO\s+ACEPTACION\s+NEGOCIACION\s+PAGO DIFERIDO",
+            window=120
+        ),
+    ]
+
+    for window in windows:
+        if not window:
+            continue
+
+        if re.search(r"\bPARA\s+X\s+PAGO\b", normalize_checkbox_text(window)):
+            return "BY PAYMENT"
+
+        chosen = nearest_marked_option_in_window(
+            window,
+            ["PAGO DIFERIDO", "NEGOCIACION", "ACEPTACION", "PAGO"],
+            max_distance=26
+        )
+
+        if chosen == "PAGO":
+            return "BY PAYMENT"
+        if chosen == "ACEPTACION":
+            return "BY ACCEPTANCE"
+        if chosen == "NEGOCIACION":
+            return "BY NEGOTIATION"
+        if chosen == "PAGO DIFERIDO":
+            return "BY DEF PAYMENT"
+
     return ""
 
 
 def infer_tolerance_from_checkboxes(source_text):
-    lines = collect_lines(source_text)
-    for line in lines:
-        if "10%" in line and "X" in line and ("ACCEPTABLE" in line or "TOLER" in line or "+/-" in line):
+    windows = [
+        extract_context_window(
+            source_text,
+            r"TOTAL QUANTITY AND AMOUNT IS ACCEPTABLE",
+            window=120
+        ),
+        extract_context_window(
+            source_text,
+            r"\b10\b.{0,40}TOTAL QUANTITY AND AMOUNT IS ACCEPTABLE",
+            window=80
+        ),
+        extract_context_window(
+            source_text,
+            r"\b5\b.{0,40}TOTAL QUANTITY AND AMOUNT IS ACCEPTABLE",
+            window=80
+        ),
+    ]
+
+    for window in windows:
+        if not window:
+            continue
+
+        w = normalize_checkbox_text(window)
+
+        if re.search(r"\bX\s*-\s*10\b.{0,40}\bTOTAL QUANTITY AND AMOUNT IS ACCEPTABLE\b", w):
             return "10/10"
-        if "5%" in line and "X" in line and ("ACCEPTABLE" in line or "TOLER" in line or "+/-" in line):
+        if re.search(r"\b10\b.{0,12}\bX\b.{0,40}\bTOTAL QUANTITY AND AMOUNT IS ACCEPTABLE\b", w):
+            return "10/10"
+        if re.search(r"\bX\s*-\s*5\b.{0,40}\bTOTAL QUANTITY AND AMOUNT IS ACCEPTABLE\b", w):
             return "5/5"
+        if re.search(r"\b5\b.{0,12}\bX\b.{0,40}\bTOTAL QUANTITY AND AMOUNT IS ACCEPTABLE\b", w):
+            return "5/5"
+
     return ""
 
 
 def infer_checkbox_selection_for_43p(text):
-    lines = collect_lines(text)
-    for line in lines:
-        if "EXPEDICIONES PARCIALES" not in line and "PARTIAL SHIPMENT" not in line and "PARTIAL SHIPMENTS" not in line:
-            continue
+    t = normalize_checkbox_text(text)
 
-        chosen = nearest_marked_option(line, ["AUTORIZADAS", "PROHIBIDAS", "CONDICIONALES"])
-        if chosen == "AUTORIZADAS":
-            return "ALLOWED"
-        if chosen == "PROHIBIDAS":
-            return "NOT ALLOWED"
-        if chosen == "CONDICIONALES":
-            return "CONDITIONAL"
+    if re.search(r"\bEXPEDICIONES PARCIALES\s+X\s+AUTORIZADAS\b", t):
+        return "ALLOWED"
+    if re.search(r"\bEXPEDICIONES PARCIALES\s+X\s+PROHIBIDAS\b", t):
+        return "NOT ALLOWED"
+
+    window = extract_context_window(
+        text,
+        r"EXPEDICIONES PARCIALES",
+        window=100
+    )
+    if not window:
+        return ""
+
+    chosen = nearest_marked_option_in_window(
+        window,
+        ["AUTORIZADAS", "PROHIBIDAS", "CONDICIONALES"],
+        max_distance=24
+    )
+
+    if chosen == "AUTORIZADAS":
+        return "ALLOWED"
+    if chosen == "PROHIBIDAS":
+        return "NOT ALLOWED"
+    if chosen == "CONDICIONALES":
+        return "CONDITIONAL"
+
     return ""
 
 
@@ -836,30 +952,25 @@ def infer_checkbox_selection_for_43t(text):
 
 
 def infer_checked_documents_for_46A(source_text):
+    t = normalize_checkbox_text(source_text)
     docs = []
-    lines = collect_lines(source_text)
 
-    for line in lines:
-        if "FACTURA COMERCIAL" in line and line_has_marker_near_label(line, "FACTURA COMERCIAL"):
-            docs.append("SIGNED COMMERCIAL INVOICE IN 3 COPIES")
-        elif "FULL SET CLEAN ON BOARD BILL OF LADING" in line and "X" in line:
-            docs.append("FULL SET CLEAN ON BOARD BILL OF LADING PLUS 3 NON NEGOTIABLE COPIES")
-        elif ("POLIZA" in line or "CERTIFICADO DE SEGURO" in line or "SEGURO" in line) and "X" in line:
-            docs.append("INSURANCE POLICY OR CERTIFICATE")
-        elif "CERTIFICADO DE ORIGEN" in line and "X" in line:
-            docs.append("CERTIFICATE OF ORIGIN ISSUED BY COMPETENT AUTHORITIES")
-        elif ("CERTIFICADO DE INSPECCION" in line or "CERTIFICADO DE INSPECCIÓN" in line) and "X" in line:
-            docs.append("INSPECTION CERTIFICATE")
-        elif ("LISTA DE CONTENIDO" in line or "PACKING LIST" in line) and "X" in line:
-            docs.append("PACKING LIST IN 3 COPIES")
-        elif ('FORM "A"' in line or "FORM A" in line) and "X" in line:
-            docs.append('FORM "A" AS PER ATTACHED SHEET')
-        elif "CONOCIMIENTO AEREO" in line and "X" in line:
-            docs.append("AIR WAYBILL")
-        elif "CMR" in line and "X" in line:
-            docs.append("INTERNATIONAL ROAD WAYBILL (CMR)")
-        elif "CIM" in line and "X" in line:
-            docs.append("RAIL WAYBILL (CIM)")
+    patterns = [
+        (r"\bX\s+FACTURA COMERCIAL\b", "SIGNED COMMERCIAL INVOICE IN 3 COPIES"),
+        (r"\bX\s+FULL SET CLEAN ON BOARD BILL OF LADING\b", "FULL SET CLEAN ON BOARD BILL OF LADING PLUS 3 NON NEGOTIABLE COPIES"),
+        (r"\bX\s+P[ÓO]LIZA O CERTIFICADO DE SEGURO\b", "INSURANCE POLICY OR CERTIFICATE"),
+        (r"\bX\s+CERTIFICADO DE ORIGEN\b", "CERTIFICATE OF ORIGIN ISSUED BY COMPETENT AUTHORITIES"),
+        (r"\bX\s+CERTIFICADO DE INSPECCI[ÓO]N\b", "INSPECTION CERTIFICATE"),
+        (r"\bX\s+LISTA DE CONTENIDO\b", "PACKING LIST IN 3 COPIES"),
+        (r'\bX\s+FORM\s+A\b', 'FORM "A" AS PER ATTACHED SHEET'),
+        (r"\bX\s+CONOCIMIENTO A[ÉE]REO\b", "AIR WAYBILL"),
+        (r"\bX\s+CMR\b", "INTERNATIONAL ROAD WAYBILL (CMR)"),
+        (r"\bX\s+CIM\b", "RAIL WAYBILL (CIM)")
+    ]
+
+    for pattern, value in patterns:
+        if re.search(pattern, t):
+            docs.append(value)
 
     deduped = []
     seen = set()
@@ -871,14 +982,32 @@ def infer_checked_documents_for_46A(source_text):
 
 
 def infer_field_71D_from_checkboxes(source_text):
-    lines = collect_lines(source_text)
-    for line in lines:
-        if "BENEFICIARIO" in line and "ORDENANTE" in line:
-            chosen = nearest_marked_option(line, ["BENEFICIARIO", "ORDENANTE"])
-            if chosen == "BENEFICIARIO":
-                return "ALL BANKING CHARGES OUTSIDE SPAIN ARE FOR BENEFICIARY'S ACCOUNT"
-            if chosen == "ORDENANTE":
-                return "ALL BANKING CHARGES OUTSIDE SPAIN ARE FOR APPLICANT'S ACCOUNT"
+    t = normalize_checkbox_text(source_text)
+
+    if re.search(r"\bPOR CUENTA DE\s+X\s+BENEFICIARIO\b", t):
+        return "ALL BANKING CHARGES OUTSIDE SPAIN ARE FOR BENEFICIARY'S ACCOUNT"
+    if re.search(r"\bPOR CUENTA DE\s+X\s+ORDENANTE\b", t):
+        return "ALL BANKING CHARGES OUTSIDE SPAIN ARE FOR APPLICANT'S ACCOUNT"
+
+    window = extract_context_window(
+        source_text,
+        r"(POR CUENTA DE|GASTOS BANCARIOS FUERA DE ESPAÑA)",
+        window=100
+    )
+    if not window:
+        return ""
+
+    chosen = nearest_marked_option_in_window(
+        window,
+        ["BENEFICIARIO", "ORDENANTE"],
+        max_distance=24
+    )
+
+    if chosen == "BENEFICIARIO":
+        return "ALL BANKING CHARGES OUTSIDE SPAIN ARE FOR BENEFICIARY'S ACCOUNT"
+    if chosen == "ORDENANTE":
+        return "ALL BANKING CHARGES OUTSIDE SPAIN ARE FOR APPLICANT'S ACCOUNT"
+
     return ""
 
 
@@ -1512,7 +1641,7 @@ if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
 
 st.markdown(
-    '<p class="small-note">Versión v6.8: parser OCR-MT700, auditoría explicativa y framework genérico de checkboxes para 41A/39A/43P/43T/46A/71D.</p>',
+    '<p class="small-note">Versión v6.9: parser OCR-MT700, auditoría explicativa y checkbox parsing reforzado para 41A/39A/43P/43T/46A/71D.</p>',
     unsafe_allow_html=True
 )
 
@@ -1604,7 +1733,7 @@ if st.button("🚀 Generar MT700"):
             st.session_state["validation"] = validation
             st.session_state["direct_ocr_map"] = direct_ocr_map
 
-            st.success("✅ Generado con parser OCR-MT700, control anti-alucinación y framework de checkboxes")
+            st.success("✅ Generado con parser OCR-MT700, control anti-alucinación y checkbox parsing reforzado")
 
         except Exception as e:
             st.error(f"Error durante la ejecución: {e}")
@@ -1642,13 +1771,13 @@ if "mt700" in st.session_state:
         st.download_button(
             "⬇️ Descargar MT700 TXT",
             txt_data,
-            file_name="MT700_ANTI_HALLUCINATION_V68.txt",
+            file_name="MT700_ANTI_HALLUCINATION_V69.txt",
             mime="text/plain"
         )
     with c2:
         st.download_button(
             "⬇️ Descargar auditoría JSON",
             json_data,
-            file_name="MT700_AUDIT_V68.json",
+            file_name="MT700_AUDIT_V69.json",
             mime="application/json"
         )
