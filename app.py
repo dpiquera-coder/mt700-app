@@ -36,7 +36,6 @@ st.set_page_config(
 
 SANTANDER_RED = "#EC0000"
 SANTANDER_DARK_RED = "#C00000"
-SANTANDER_LIGHT = "#FFF5F5"
 SANTANDER_BORDER = "#F3C7C7"
 
 st.markdown(f"""
@@ -44,7 +43,6 @@ st.markdown(f"""
 :root {{
     --santander-red: {SANTANDER_RED};
     --santander-dark-red: {SANTANDER_DARK_RED};
-    --santander-light: {SANTANDER_LIGHT};
     --santander-border: {SANTANDER_BORDER};
 }}
 
@@ -63,11 +61,6 @@ st.markdown(f"""
     border-radius: 14px;
     padding: 14px 18px;
     box-shadow: 0 4px 18px rgba(236, 0, 0, 0.06);
-}}
-
-[data-testid="stMetric"] label,
-[data-testid="stMetricValue"] {{
-    color: #222 !important;
 }}
 
 .stButton > button,
@@ -102,10 +95,6 @@ textarea, .stTextArea textarea {{
     border-radius: 10px !important;
 }}
 
-.stAlert {{
-    border-radius: 12px;
-}}
-
 .mt700-hero {{
     background: linear-gradient(135deg, {SANTANDER_RED} 0%, #ff3b30 100%);
     color: white;
@@ -129,7 +118,6 @@ textarea, .stTextArea textarea {{
     display: flex;
     align-items: center;
     justify-content: center;
-    backdrop-filter: blur(6px);
     flex-shrink: 0;
 }}
 
@@ -157,18 +145,6 @@ textarea, .stTextArea textarea {{
     font-weight: 700;
     margin-top: 0.5rem;
     margin-bottom: 0.35rem;
-}}
-
-.soft-card {{
-    background: white;
-    border: 1px solid var(--santander-border);
-    border-radius: 14px;
-    padding: 14px 16px;
-    margin-bottom: 1rem;
-}}
-
-code {{
-    color: var(--santander-dark-red);
 }}
 </style>
 """, unsafe_allow_html=True)
@@ -245,7 +221,10 @@ SPANISH_TO_ENGLISH_REPLACEMENTS = {
     "A CARGO DEL BENEFICIARIO": "FOR BENEFICIARY'S ACCOUNT",
     "EMITIDO POR": "ISSUED BY",
     "A FAVOR DE": "IN FAVOUR OF",
-    "SI HUBIERA": "IF ANY"
+    "SI HUBIERA": "IF ANY",
+    "LOGISTICA DE PRUEBA": "LOGISTICA DE PRUEBA",
+    "LOS GASTOS BANCARIOS": "ALL BANKING CHARGES",
+    "SON POR CUENTA DEL BENEFICIARIO": "ARE FOR BENEFICIARY'S ACCOUNT"
 }
 
 EXPECTED_GUIDE = """
@@ -284,7 +263,7 @@ Hard prohibitions:
 - Do NOT place amounts in :50:, :59:, :71D:, :72Z:, :48:, :49:
 - Do NOT place beneficiary name in :40A:
 - Do NOT place addresses in :40E:
-- Final output should be uppercase.
+- Final output must be uppercase.
 """
 
 STRUCTURED_EXTRACTION_PROMPT = """
@@ -323,37 +302,8 @@ Respect the semantic type of each field.
 Do not output any disallowed tags.
 Narrative fields must be in English.
 Final output must be fully uppercase.
+If some field is unclear, preserve the provided seed structure and do not omit valid populated tags.
 """
-
-NARRATIVE_TRANSLATION_PROMPT = """
-You are a senior Trade Finance banking translator.
-
-Translate ONLY the provided MT700 narrative field values into professional banking English.
-Return JSON only.
-
-Rules:
-- Input fields are MT700 narrative tags and their current values.
-- Preserve factual content: amounts, percentages, references, addresses, bank names, BICs, dates, phone numbers, company names.
-- Translate wording only.
-- Do not add new facts.
-- Do not omit facts.
-- Keep SWIFT-style concise banking language.
-- Return exactly the same keys you received.
-- Return values in uppercase.
-"""
-
-NARRATIVE_TRANSLATION_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "mt700_narrative_translation",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {tag: {"type": "string"} for tag in NARRATIVE_TAGS},
-            "additionalProperties": False
-        }
-    }
-}
 
 SCHEMA = {
     "type": "json_schema",
@@ -399,7 +349,7 @@ def safe_str_value(value) -> str:
             item = safe_str_value(item)
             if item:
                 parts.append(item)
-        return "\\n".join(parts).strip()
+        return "\n".join(parts).strip()
     if isinstance(value, dict):
         try:
             return json.dumps(value, ensure_ascii=False).strip()
@@ -413,9 +363,9 @@ def force_uppercase(text: str) -> str:
 def clean_spanish_artifacts(text: str) -> str:
     result = force_uppercase(text)
     for es, en in sorted(SPANISH_TO_ENGLISH_REPLACEMENTS.items(), key=lambda x: len(x[0]), reverse=True):
-        result = re.sub(rf"\\b{re.escape(es)}\\b", en, result)
+        result = re.sub(rf"\b{re.escape(es)}\b", en, result)
     result = re.sub(r"[ ]{2,}", " ", result)
-    result = re.sub(r" *\\n *", "\\n", result)
+    result = re.sub(r" *\n *", "\n", result)
     return result.strip()
 
 def call_llm_json(system_prompt: str, user_text: str, schema: Dict, max_tokens: int = 1600) -> Dict:
@@ -435,7 +385,7 @@ def call_llm_json(system_prompt: str, user_text: str, schema: Dict, max_tokens: 
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
-                {"role": "system", "content": system_prompt + "\\nReturn only valid JSON."},
+                {"role": "system", "content": system_prompt + "\nReturn only valid JSON."},
                 {"role": "user", "content": user_text}
             ],
             response_format={"type": "json_object"},
@@ -457,10 +407,10 @@ def call_llm_text(system_prompt: str, user_text: str, max_tokens: int = 2200) ->
     return response.choices[0].message.content or ""
 
 def clean_text(text: str) -> str:
-    text = text.replace("\\xa0", " ")
-    text = "".join(c for c in text if c.isprintable() or c in "\\n\\t")
-    text = re.sub(r"[ \\t]+", " ", text)
-    text = re.sub(r"\\n{3,}", "\\n\\n", text)
+    text = text.replace("\xa0", " ")
+    text = "".join(c for c in text if c.isprintable() or c in "\n\t")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
     return text[:50000].strip()
 
 def extract_doc_legacy(data: bytes) -> str:
@@ -486,12 +436,28 @@ def extract_pdf_ocr_all_pages(data: bytes) -> str:
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             txt = pytesseract.image_to_string(img, lang="spa+eng")
-            out.append(f"==PAGE {i+1}==\\n{txt}")
-        return "\\n\\n".join(out)
+            out.append(f"==PAGE {i+1}==\n{txt}")
+        return "\n\n".join(out)
     except Exception:
         return ""
 
-def normalize_field_map(data: Dict) -> Dict:
+def extract_field_78_from_source(source_text: str) -> str:
+    text = force_uppercase(source_text)
+    patterns = [
+        r"\b78\b(.*?)(?=\b57A\b)",
+        r":78:(.*?)(?=:57A:)",
+        r"\b78(.*?)(?=\b72Z\b)"
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, text, re.S)
+        if m:
+            candidate = clean_spanish_artifacts(m.group(1))
+            candidate = re.sub(r"^[:\s.-]+", "", candidate).strip()
+            if len(candidate) > 20:
+                return candidate
+    return ""
+
+def normalize_field_map(data: Dict, source_text: str = "") -> Dict:
     if not isinstance(data, dict):
         return {k: "" for k in FIELD_KEYS}
 
@@ -514,7 +480,7 @@ def normalize_field_map(data: Dict) -> Dict:
 
     if normalized.get("field_32B"):
         v = normalized["field_32B"].replace(" ", "")
-        v = re.sub(r"^(USD|EUR|GBP)\\s*([0-9].*)$", r"\\1\\2", v)
+        v = re.sub(r"^(USD|EUR|GBP)\s*([0-9].*)$", r"\1\2", v)
         normalized["field_32B"] = v
 
     if normalized.get("field_43P"):
@@ -530,6 +496,9 @@ def normalize_field_map(data: Dict) -> Dict:
             normalized["field_43T"] = "ALLOWED"
         elif "NOT" in v:
             normalized["field_43T"] = "NOT ALLOWED"
+
+    if not normalized.get("field_78") and source_text:
+        normalized["field_78"] = extract_field_78_from_source(source_text)
 
     return normalized
 
@@ -554,10 +523,10 @@ def build_mt700_from_map(m: Dict) -> str:
             lines.append(f":{tag}:{value}")
 
     lines.append("-}")
-    return "\\n".join(lines).upper()
+    return "\n".join(lines).upper()
 
 def parse_mt700_fields(mt700: str) -> Dict[str, str]:
-    pattern = re.compile(r"(?ms)^:([0-9]{2}[A-Z]?):(.*?)(?=^:[0-9]{2}[A-Z]?:|^-}\\s*$|\\Z)")
+    pattern = re.compile(r"(?ms)^:([0-9]{2}[A-Z]?):(.*?)(?=^:[0-9]{2}[A-Z]?:|^-}\s*$|\Z)")
     return {tag: value.strip() for tag, value in pattern.findall(mt700 or "")}
 
 def contains_spanish_narrative(text: str) -> bool:
@@ -577,7 +546,7 @@ def validate_mt700(mt700: str) -> Dict:
         if tag not in ALLOWED_TAGS:
             issues.append(f"Forbidden tag detected :{tag}:")
 
-    if "32B" in fields and not re.match(r"^[A-Z]{3}[0-9,\\.]+$", fields["32B"].replace(" ", "")):
+    if "32B" in fields and not re.match(r"^[A-Z]{3}[0-9,\.]+$", fields["32B"].replace(" ", "")):
         issues.append(":32B: must contain currency and amount only")
 
     if "40A" in fields and fields["40A"].upper() not in ["IRREVOCABLE", "REVOCABLE"]:
@@ -592,13 +561,13 @@ def validate_mt700(mt700: str) -> Dict:
     if "49" in fields and "%" in fields["49"]:
         issues.append(":49: cannot contain percentage value")
 
-    if "71D" in fields and re.fullmatch(r"[0-9,\\.]+", fields["71D"].strip()):
+    if "71D" in fields and re.fullmatch(r"[0-9,\.]+", fields["71D"].strip()):
         issues.append(":71D: cannot be numeric only")
 
-    if "50" in fields and re.fullmatch(r"[0-9,\\.]+", fields["50"].strip()):
+    if "50" in fields and re.fullmatch(r"[0-9,\.]+", fields["50"].strip()):
         issues.append(":50: cannot be numeric only")
 
-    if "59" in fields and re.fullmatch(r"[0-9,\\.]+", fields["59"].strip()):
+    if "59" in fields and re.fullmatch(r"[0-9,\.]+", fields["59"].strip()):
         issues.append(":59: cannot be numeric only")
 
     for tag in NARRATIVE_TAGS:
@@ -645,37 +614,57 @@ def translate_narrative_fields(mt700: str, defective_fields: List[str], source_t
     }
 
     user_text = (
-        "SOURCE DOCUMENTS:\\n" + source_text[:20000] +
-        "\\n\\nCURRENT NARRATIVE FIELD VALUES:\\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+        "SOURCE DOCUMENTS:\n" + source_text[:20000] +
+        "\n\nCURRENT NARRATIVE FIELD VALUES:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
     )
 
-    translated = call_llm_json(NARRATIVE_TRANSLATION_PROMPT, user_text, schema, max_tokens=1200)
+    translated = call_llm_json(
+        """
+You are a senior Trade Finance banking translator.
+
+Translate ONLY the provided MT700 narrative field values into professional banking English.
+Return JSON only.
+
+Rules:
+- Preserve factual content.
+- Translate wording only.
+- Do not add facts.
+- Do not omit facts.
+- Return values in uppercase.
+""",
+        user_text,
+        schema,
+        max_tokens=1200
+    )
     return {k: clean_spanish_artifacts(safe_str_value(v)) for k, v in translated.items() if k in payload}
 
 def replace_mt700_fields(mt700: str, replacements: Dict[str, str]) -> str:
     if not replacements:
         return mt700
 
-    pattern = re.compile(r"(?ms)^:([0-9]{2}[A-Z]?):(.*?)(?=^:[0-9]{2}[A-Z]?:|^-}\\s*$|\\Z)")
+    pattern = re.compile(r"(?ms)^:([0-9]{2}[A-Z]?):(.*?)(?=^:[0-9]{2}[A-Z]?:|^-}\s*$|\Z)")
 
     def repl(match):
         tag = match.group(1)
         old_value = match.group(2)
         if tag in replacements and replacements[tag].strip():
             new_value = clean_spanish_artifacts(replacements[tag])
-            return f":{tag}:{new_value}\\n"
+            return f":{tag}:{new_value}\n"
         return f":{tag}:{old_value}"
 
     result = pattern.sub(repl, mt700)
-    result = re.sub(r"\\n-}$", "\\n-}", result)
+    result = re.sub(r"\n-}$", "\n-}", result)
     return result.upper()
 
-def final_cleanup_mt700(mt700: str) -> str:
+def final_cleanup_mt700(mt700: str, seed_mt700: str = "") -> str:
     parsed = parse_mt700_fields(mt700)
+    if len(parsed) < 5 and seed_mt700:
+        parsed = parse_mt700_fields(seed_mt700)
+
     rebuilt = []
-    header_match = re.match(r"(?s)^(.*?\\{4:\\n)", mt700)
-    header = header_match.group(1) if header_match else "{1:F01BSCHESMMXXXX0123000001}{2:I700BSCHHKHHXXXXN2020}{4:\\n"
-    rebuilt.append(header.rstrip("\\n"))
+    header_match = re.match(r"(?s)^(.*?\{4:\n)", mt700)
+    header = header_match.group(1) if header_match else "{1:F01BSCHESMMXXXX0123000001}{2:I700BSCHHKHHXXXXN2020}{4:\n"
+    rebuilt.append(header.rstrip("\n"))
 
     for tag in ALLOWED_TAGS:
         if tag in parsed and parsed[tag].strip():
@@ -683,7 +672,7 @@ def final_cleanup_mt700(mt700: str) -> str:
             rebuilt.append(f":{tag}:{value}")
 
     rebuilt.append("-}")
-    return "\\n".join(rebuilt).upper()
+    return "\n".join(rebuilt).upper()
 
 if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
@@ -708,7 +697,7 @@ if st.button("🚀 Generar MT700"):
             elif name.endswith(".docx"):
                 try:
                     d = docx.Document(BytesIO(data))
-                    txt = "\\n".join(p.text for p in d.paragraphs)
+                    txt = "\n".join(p.text for p in d.paragraphs)
                     mode = "docx"
                 except Exception:
                     txt = ""
@@ -725,7 +714,7 @@ if st.button("🚀 Generar MT700"):
                     mode = "unknown"
 
             txt = clean_text(txt)
-            full_parts.append(f"### {f.name}\\n{txt}")
+            full_parts.append(f"### {f.name}\n{txt}")
             debug.append({
                 "file": f.name,
                 "mode": mode,
@@ -733,16 +722,16 @@ if st.button("🚀 Generar MT700"):
                 "preview": txt[:800]
             })
 
-        source_text = "\\n\\n".join(full_parts)
+        source_text = "\n\n".join(full_parts)
 
         with st.expander("🧪 Debug extracción", expanded=False):
             st.json(debug)
             st.text_area("Texto fuente", source_text[:5000], height=300)
 
-        user_payload = EXPECTED_GUIDE + "\\n\\nSOURCE DOCUMENTS:\\n" + source_text[:30000]
+        user_payload = EXPECTED_GUIDE + "\n\nSOURCE DOCUMENTS:\n" + source_text[:30000]
 
         field_map_raw = call_llm_json(STRUCTURED_EXTRACTION_PROMPT, user_payload, SCHEMA, max_tokens=1600)
-        field_map = normalize_field_map(field_map_raw)
+        field_map = normalize_field_map(field_map_raw, source_text)
 
         with st.expander("🧪 Tipos del field_map", expanded=False):
             type_debug = {k: str(type(v)) for k, v in field_map_raw.items()} if isinstance(field_map_raw, dict) else {}
@@ -753,17 +742,26 @@ if st.button("🚀 Generar MT700"):
 
         seed_mt700 = build_mt700_from_map(field_map)
 
+        with st.expander("🧪 Seed MT700", expanded=False):
+            st.text_area("Seed", seed_mt700, height=400)
+
         mt700 = call_llm_text(
             GENERATION_PROMPT,
             EXPECTED_GUIDE
-            + "\\n\\nSTRUCTURED FIELD MAP:\\n"
+            + "\n\nSTRUCTURED FIELD MAP:\n"
             + json.dumps(field_map, ensure_ascii=False, indent=2)
-            + "\\n\\nSEED MT700:\\n"
+            + "\n\nSEED MT700:\n"
             + seed_mt700,
             max_tokens=2200
         )
 
-        mt700 = final_cleanup_mt700(mt700)
+        with st.expander("🧪 Raw MT700 model output", expanded=False):
+            st.text_area("Model output", mt700, height=400)
+
+        if len(parse_mt700_fields(mt700)) < 5:
+            mt700 = seed_mt700
+
+        mt700 = final_cleanup_mt700(mt700, seed_mt700=seed_mt700)
         validation = validate_mt700(mt700)
 
         narrative_problem_fields = [
@@ -775,20 +773,21 @@ if st.button("🚀 Generar MT700"):
         if narrative_problem_fields:
             translated_fields = translate_narrative_fields(mt700, narrative_problem_fields, source_text)
             mt700_repaired = replace_mt700_fields(mt700, translated_fields)
-            mt700_repaired = final_cleanup_mt700(mt700_repaired)
+            mt700_repaired = final_cleanup_mt700(mt700_repaired, seed_mt700=seed_mt700)
             repaired_validation = validate_mt700(mt700_repaired)
 
             if repaired_validation["score"] >= validation["score"]:
                 mt700 = mt700_repaired
                 validation = repaired_validation
 
-        mt700 = final_cleanup_mt700(mt700)
+        mt700 = final_cleanup_mt700(mt700, seed_mt700=seed_mt700)
         validation = validate_mt700(mt700)
 
         st.session_state["source_text"] = source_text
         st.session_state["field_map"] = field_map
         st.session_state["field_map_raw"] = field_map_raw
         st.session_state["translated_fields"] = translated_fields
+        st.session_state["seed_mt700"] = seed_mt700
         st.session_state["mt700"] = mt700
         st.session_state["validation"] = validation
         st.success("✅ Generado")
@@ -799,6 +798,7 @@ if "mt700" in st.session_state:
         st.json(st.session_state.get("field_map", {}))
         st.json(st.session_state.get("translated_fields", {}))
         st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:5000], height=280)
+        st.text_area("Seed persistido", st.session_state.get("seed_mt700", ""), height=240)
 
     col1, col2 = st.columns([2, 1])
     with col1:
