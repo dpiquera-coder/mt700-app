@@ -6,7 +6,7 @@ import re
 import subprocess
 import tempfile
 import shutil
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 try:
     import fitz
@@ -28,8 +28,8 @@ try:
 except Exception:
     pytesseract = None
 
-st.set_page_config(page_title="MT700 Generator v5", layout="wide")
-st.title("📡 MT700 Generator - Trade Finance v5 (strict MT700 mapping)")
+st.set_page_config(page_title="MT700 Generator v5.1", layout="wide")
+st.title("📡 MT700 Generator - Trade Finance v5.1 (strict MT700 mapping)")
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
@@ -37,6 +37,14 @@ files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 ALLOWED_TAGS = [
     "27", "20", "40A", "40E", "31C", "31D", "50", "59", "32B", "39A", "41A", "42C",
     "43P", "43T", "44E", "44F", "44C", "45A", "46A", "47A", "48", "49", "57A", "71D", "78", "72Z"
+]
+
+FIELD_KEYS = [
+    "field_27", "field_20", "field_40A", "field_40E", "field_31C", "field_31D",
+    "field_50", "field_59", "field_32B", "field_39A", "field_41A", "field_42C",
+    "field_43P", "field_43T", "field_44E", "field_44F", "field_44C", "field_45A",
+    "field_46A", "field_47A", "field_48", "field_49", "field_57A", "field_71D",
+    "field_78", "field_72Z"
 ]
 
 SPANISH_HINT_WORDS = [
@@ -128,41 +136,8 @@ SCHEMA = {
         "strict": True,
         "schema": {
             "type": "object",
-            "properties": {
-                "field_27": {"type": ["string", "null"]},
-                "field_20": {"type": ["string", "null"]},
-                "field_40A": {"type": ["string", "null"]},
-                "field_40E": {"type": ["string", "null"]},
-                "field_31C": {"type": ["string", "null"]},
-                "field_31D": {"type": ["string", "null"]},
-                "field_50": {"type": ["string", "null"]},
-                "field_59": {"type": ["string", "null"]},
-                "field_32B": {"type": ["string", "null"]},
-                "field_39A": {"type": ["string", "null"]},
-                "field_41A": {"type": ["string", "null"]},
-                "field_42C": {"type": ["string", "null"]},
-                "field_43P": {"type": ["string", "null"]},
-                "field_43T": {"type": ["string", "null"]},
-                "field_44E": {"type": ["string", "null"]},
-                "field_44F": {"type": ["string", "null"]},
-                "field_44C": {"type": ["string", "null"]},
-                "field_45A": {"type": ["string", "null"]},
-                "field_46A": {"type": ["string", "null"]},
-                "field_47A": {"type": ["string", "null"]},
-                "field_48": {"type": ["string", "null"]},
-                "field_49": {"type": ["string", "null"]},
-                "field_57A": {"type": ["string", "null"]},
-                "field_71D": {"type": ["string", "null"]},
-                "field_78": {"type": ["string", "null"]},
-                "field_72Z": {"type": ["string", "null"]}
-            },
-            "required": [
-                "field_27", "field_20", "field_40A", "field_40E", "field_31C", "field_31D",
-                "field_50", "field_59", "field_32B", "field_39A", "field_41A", "field_42C",
-                "field_43P", "field_43T", "field_44E", "field_44F", "field_44C", "field_45A",
-                "field_46A", "field_47A", "field_48", "field_49", "field_57A", "field_71D",
-                "field_78", "field_72Z"
-            ],
+            "properties": {k: {"type": ["string", "null"]} for k in FIELD_KEYS},
+            "required": FIELD_KEYS,
             "additionalProperties": False
         }
     }
@@ -182,6 +157,34 @@ def safe_json_load(text: str) -> Dict:
             except Exception:
                 pass
     return {}
+
+def safe_str_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value).strip()
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if item is None:
+                continue
+            if isinstance(item, str):
+                item = item.strip()
+                if item:
+                    parts.append(item)
+            else:
+                item = str(item).strip()
+                if item:
+                    parts.append(item)
+        return "\n".join(parts).strip()
+    if isinstance(value, dict):
+        try:
+            return json.dumps(value, ensure_ascii=False).strip()
+        except Exception:
+            return str(value).strip()
+    return str(value).strip()
 
 def call_llm_json(system_prompt: str, user_text: str, schema: Dict, max_tokens: int = 1600) -> Dict:
     try:
@@ -257,41 +260,46 @@ def extract_pdf_ocr_all_pages(data: bytes) -> str:
         return ""
 
 def normalize_field_map(data: Dict) -> Dict:
-    if not data:
-        return {}
+    if not isinstance(data, dict):
+        return {k: "" for k in FIELD_KEYS}
 
-    if not data.get("field_27"):
-        data["field_27"] = "1/1"
+    normalized = {}
+    for key in FIELD_KEYS:
+        normalized[key] = safe_str_value(data.get(key))
 
-    if data.get("field_40A"):
-        val = data["field_40A"].upper()
+    if not normalized.get("field_27"):
+        normalized["field_27"] = "1/1"
+
+    if normalized.get("field_40A"):
+        val = normalized["field_40A"].upper()
         if "IRREV" in val:
-            data["field_40A"] = "IRREVOCABLE"
+            normalized["field_40A"] = "IRREVOCABLE"
+        elif "REVOC" in val:
+            normalized["field_40A"] = "REVOCABLE"
 
-    if data.get("field_40E"):
-        if "UCP" in data["field_40E"].upper():
-            data["field_40E"] = "UCP LATEST VERSION"
+    if normalized.get("field_40E") and "UCP" in normalized["field_40E"].upper():
+        normalized["field_40E"] = "UCP LATEST VERSION"
 
-    if data.get("field_32B"):
-        v = data["field_32B"].replace(" ", "")
+    if normalized.get("field_32B"):
+        v = normalized["field_32B"].replace(" ", "")
         v = re.sub(r"^(USD|EUR|GBP)\s*([0-9].*)$", r"\1\2", v)
-        data["field_32B"] = v
+        normalized["field_32B"] = v
 
-    if data.get("field_43P"):
-        v = data["field_43P"].upper()
+    if normalized.get("field_43P"):
+        v = normalized["field_43P"].upper()
         if "ALLOW" in v:
-            data["field_43P"] = "ALLOWED"
+            normalized["field_43P"] = "ALLOWED"
         elif "NOT" in v:
-            data["field_43P"] = "NOT ALLOWED"
+            normalized["field_43P"] = "NOT ALLOWED"
 
-    if data.get("field_43T"):
-        v = data["field_43T"].upper()
+    if normalized.get("field_43T"):
+        v = normalized["field_43T"].upper()
         if "ALLOW" in v:
-            data["field_43T"] = "ALLOWED"
+            normalized["field_43T"] = "ALLOWED"
         elif "NOT" in v:
-            data["field_43T"] = "NOT ALLOWED"
+            normalized["field_43T"] = "NOT ALLOWED"
 
-    return data
+    return normalized
 
 def build_mt700_from_map(m: Dict) -> str:
     lines = [
@@ -306,11 +314,13 @@ def build_mt700_from_map(m: Dict) -> str:
         "48": "field_48", "49": "field_49", "57A": "field_57A", "71D": "field_71D",
         "78": "field_78", "72Z": "field_72Z"
     }
+
     for tag in ALLOWED_TAGS:
         key = mapping[tag]
-        value = (m.get(key) or "").strip()
+        value = safe_str_value(m.get(key))
         if value:
             lines.append(f":{tag}:{value}")
+
     lines.append("-}")
     return "\n".join(lines)
 
@@ -430,21 +440,27 @@ if st.button("🚀 Generar MT700"):
         st.json(debug)
         st.text_area("Texto fuente", source_text[:5000], height=300)
 
-        user_payload = (
-            EXPECTED_GUIDE +
-            "\n\nSOURCE DOCUMENTS:\n" + source_text[:30000]
-        )
+        user_payload = EXPECTED_GUIDE + "\n\nSOURCE DOCUMENTS:\n" + source_text[:30000]
 
-        field_map = call_llm_json(STRUCTURED_EXTRACTION_PROMPT, user_payload, SCHEMA, max_tokens=1600)
-        field_map = normalize_field_map(field_map)
+        field_map_raw = call_llm_json(STRUCTURED_EXTRACTION_PROMPT, user_payload, SCHEMA, max_tokens=1600)
+        field_map = normalize_field_map(field_map_raw)
+
+        st.subheader("🧪 Tipos del field_map")
+        type_debug = {k: str(type(v)) for k, v in field_map_raw.items()} if isinstance(field_map_raw, dict) else {}
+        st.json(type_debug)
 
         st.subheader("🧩 Field map estructurado")
         st.json(field_map)
 
         seed_mt700 = build_mt700_from_map(field_map)
+
         mt700 = call_llm_text(
             GENERATION_PROMPT,
-            EXPECTED_GUIDE + "\n\nSTRUCTURED FIELD MAP:\n" + json.dumps(field_map, ensure_ascii=False, indent=2) + "\n\nSEED MT700:\n" + seed_mt700,
+            EXPECTED_GUIDE
+            + "\n\nSTRUCTURED FIELD MAP:\n"
+            + json.dumps(field_map, ensure_ascii=False, indent=2)
+            + "\n\nSEED MT700:\n"
+            + seed_mt700,
             max_tokens=2200
         )
 
@@ -452,12 +468,14 @@ if st.button("🚀 Generar MT700"):
 
         st.session_state["source_text"] = source_text
         st.session_state["field_map"] = field_map
+        st.session_state["field_map_raw"] = field_map_raw
         st.session_state["mt700"] = mt700
         st.session_state["validation"] = validation
         st.success("✅ Generado")
 
 if "mt700" in st.session_state:
     with st.expander("🧪 Debug persistido", expanded=False):
+        st.json(st.session_state.get("field_map_raw", {}))
         st.json(st.session_state.get("field_map", {}))
         st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:5000], height=280)
 
@@ -474,6 +492,7 @@ if "mt700" in st.session_state:
 
     txt_data = edited.encode("utf-8")
     json_data = json.dumps({
+        "field_map_raw": st.session_state["field_map_raw"],
         "field_map": st.session_state["field_map"],
         "validation": st.session_state["validation"],
         "parsed_fields": parsed
