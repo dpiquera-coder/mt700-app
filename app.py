@@ -22,8 +22,8 @@ try:
 except Exception:
     docx = None
 
-st.set_page_config(page_title="MT700 Generator v3", layout="wide")
-st.title("📡 MT700 Generator - Trade Finance v3")
+st.set_page_config(page_title="MT700 Generator v3.1", layout="wide")
+st.title("📡 MT700 Generator - Trade Finance v3.1")
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
@@ -74,12 +74,14 @@ Return ONLY the full corrected MT700 in SWIFT format.
 
 EXTRACTION_PROMPT = """
 You are a Trade Finance document extraction engine.
-Extract only factual data from the documents. Use null if missing. Return valid JSON only.
+Extract only factual data from the documents. Use null if missing.
+Return JSON only.
 """
 
 VAL_PROMPT = """
 You are a senior Trade Finance MT700 validator.
-Validate strictly against format and banking logic. Return JSON only.
+Validate strictly against format and banking logic.
+Return JSON only.
 """
 
 EXTRACTION_SCHEMA = {
@@ -168,6 +170,73 @@ MANDATORY_FIELDS = [
     "43P", "43T", "44E", "44F", "44C", "45A", "46A", "47A", "48", "49", "57A", "71D", "78", "72Z"
 ]
 
+def safe_json_load(text: str) -> Dict:
+    try:
+        return json.loads(text)
+    except Exception:
+        m = re.search(r"\{.*\}", text, re.S)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                pass
+    return {}
+
+def call_llm_text(system_prompt: str, user_text: str, max_tokens: int = 1800) -> str:
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text}
+        ],
+        max_tokens=max_tokens,
+        temperature=0.1
+    )
+    return response.choices[0].message.content or ""
+
+def call_llm_json(system_prompt: str, user_text: str, schema: Dict = None, max_tokens: int = 1200) -> Dict:
+    try:
+        if schema:
+            response = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_text}
+                ],
+                response_format=schema,
+                max_tokens=max_tokens,
+                temperature=0.1
+            )
+            return safe_json_load(response.choices[0].message.content or "{}")
+    except Exception:
+        pass
+
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": system_prompt + "\nReturn ONLY valid JSON."},
+                {"role": "user", "content": user_text}
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=max_tokens,
+            temperature=0.1
+        )
+        return safe_json_load(response.choices[0].message.content or "{}")
+    except Exception:
+        pass
+
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[
+            {"role": "system", "content": system_prompt + "\nReturn ONLY valid JSON. No markdown. No explanation."},
+            {"role": "user", "content": user_text}
+        ],
+        max_tokens=max_tokens,
+        temperature=0.1
+    )
+    return safe_json_load(response.choices[0].message.content or "{}")
+
 def extract_doc_legacy(data: bytes) -> str:
     try:
         with tempfile.NamedTemporaryFile(delete=True, suffix=".doc") as tmp:
@@ -221,31 +290,6 @@ def clean_text(text: str) -> str:
     text = "".join(c for c in text if c.isprintable() or c in "\n\t")
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text[:22000]
-
-def call_llm_text(system_prompt: str, user_text: str, max_tokens: int = 1800) -> str:
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text}
-        ],
-        max_tokens=max_tokens,
-        temperature=0.1
-    )
-    return response.choices[0].message.content or ""
-
-def call_llm_json(system_prompt: str, user_text: str, schema: Dict, max_tokens: int = 1200) -> Dict:
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text}
-        ],
-        response_format=schema,
-        max_tokens=max_tokens,
-        temperature=0.1
-    )
-    return json.loads(response.choices[0].message.content or "{}")
 
 def parse_mt700_fields(mt700: str) -> Dict[str, str]:
     if not mt700:
@@ -380,6 +424,30 @@ def build_error_table(validation: Dict) -> List[Dict]:
         rows.append({"type": "WARNING", "field": ", ".join(fields) if fields else "-", "message": warning})
     return rows
 
+def default_extraction() -> Dict:
+    return {
+        "applicant": None,
+        "beneficiary": None,
+        "currency": None,
+        "amount": None,
+        "issue_date": None,
+        "expiry_date": None,
+        "expiry_place": None,
+        "available_with_bank": None,
+        "advising_bank": None,
+        "latest_shipment_date": None,
+        "port_of_loading": None,
+        "port_of_destination": None,
+        "incoterm": None,
+        "goods_description": None,
+        "hs_code": None,
+        "order_reference": None,
+        "documents_required": [],
+        "special_conditions": [],
+        "charges": None,
+        "reimbursement_instructions": None
+    }
+
 def render_extraction_summary(data: Dict):
     st.subheader("📌 Datos extraídos")
     col1, col2 = st.columns(2)
@@ -408,40 +476,62 @@ if st.button("🚀 Generar MT700"):
             try:
                 txt = clean_text(extract_text(f))
                 extracted_docs.append(f"### {f.name}\n{txt}")
-            except Exception:
-                st.warning(f"Error leyendo {f.name}")
+            except Exception as e:
+                st.warning(f"Error leyendo {f.name}: {str(e)}")
 
         full_text = "\n\n".join(extracted_docs)
         st.write("📄 DEBUG TEXTO:", full_text[:1200])
 
-        extraction = call_llm_json(EXTRACTION_PROMPT, full_text, EXTRACTION_SCHEMA, max_tokens=1200)
-        mt700 = call_llm_text(GEN_PROMPT, full_text, max_tokens=1800)
+        try:
+            extraction = call_llm_json(EXTRACTION_PROMPT, full_text, EXTRACTION_SCHEMA, max_tokens=1200)
+            if not extraction:
+                extraction = default_extraction()
+        except Exception as e:
+            extraction = default_extraction()
+            st.warning(f"Fallo en extracción estructurada: {str(e)}")
+
+        try:
+            mt700 = call_llm_text(GEN_PROMPT, full_text, max_tokens=1800)
+        except Exception as e:
+            mt700 = ""
+            st.error(f"Fallo generando MT700: {str(e)}")
 
         local_val = local_validate(mt700)
+
         llm_val = None
         try:
             llm_val = call_llm_json(VAL_PROMPT, mt700, VALIDATION_SCHEMA, max_tokens=1000)
-        except Exception:
-            llm_val = None
+            if not llm_val:
+                llm_val = None
+        except Exception as e:
+            st.warning(f"Fallo en validación LLM, se usa solo validación local: {str(e)}")
+
         validation = merge_validation(local_val, llm_val)
 
-        if not validation.get("is_valid", False) or validation.get("score", 0) < 85:
-            repair_input = (
-                "EXTRACTED DOCUMENTS:\n" + full_text[:14000] +
-                "\n\nMT700 DRAFT:\n" + mt700 +
-                "\n\nVALIDATION FINDINGS:\n" + json.dumps(validation, indent=2)
-            )
-            repaired = call_llm_text(CORRECTION_PROMPT, repair_input, max_tokens=1800)
-            local_val_2 = local_validate(repaired)
-            llm_val_2 = None
+        if mt700 and (not validation.get("is_valid", False) or validation.get("score", 0) < 85):
             try:
-                llm_val_2 = call_llm_json(VAL_PROMPT, repaired, VALIDATION_SCHEMA, max_tokens=1000)
-            except Exception:
+                repair_input = (
+                    "EXTRACTED DOCUMENTS:\n" + full_text[:14000] +
+                    "\n\nMT700 DRAFT:\n" + mt700 +
+                    "\n\nVALIDATION FINDINGS:\n" + json.dumps(validation, indent=2)
+                )
+                repaired = call_llm_text(CORRECTION_PROMPT, repair_input, max_tokens=1800)
+                local_val_2 = local_validate(repaired)
+
                 llm_val_2 = None
-            validation_2 = merge_validation(local_val_2, llm_val_2)
-            if validation_2.get("score", 0) >= validation.get("score", 0):
-                mt700 = repaired
-                validation = validation_2
+                try:
+                    llm_val_2 = call_llm_json(VAL_PROMPT, repaired, VALIDATION_SCHEMA, max_tokens=1000)
+                    if not llm_val_2:
+                        llm_val_2 = None
+                except Exception:
+                    llm_val_2 = None
+
+                validation_2 = merge_validation(local_val_2, llm_val_2)
+                if validation_2.get("score", 0) >= validation.get("score", 0):
+                    mt700 = repaired
+                    validation = validation_2
+            except Exception as e:
+                st.warning(f"No se pudo reparar automáticamente el MT700: {str(e)}")
 
         st.session_state["source_text"] = full_text
         st.session_state["extraction"] = extraction
@@ -487,23 +577,30 @@ if "mt700" in st.session_state:
             if not defective:
                 st.info("No hay campos defectuosos detectados")
             else:
-                repair_input = (
-                    "EXTRACTED DOCUMENTS:\n" + st.session_state["source_text"][:14000] +
-                    "\n\nCURRENT MT700:\n" + edited_mt700 +
-                    "\n\nDEFECTIVE FIELDS:\n" + ", ".join(defective)
-                )
-                fixed = call_llm_text(FIELD_FIX_PROMPT, repair_input, max_tokens=1800)
-                local_val_3 = local_validate(fixed)
-                llm_val_3 = None
                 try:
-                    llm_val_3 = call_llm_json(VAL_PROMPT, fixed, VALIDATION_SCHEMA, max_tokens=1000)
-                except Exception:
+                    repair_input = (
+                        "EXTRACTED DOCUMENTS:\n" + st.session_state["source_text"][:14000] +
+                        "\n\nCURRENT MT700:\n" + edited_mt700 +
+                        "\n\nDEFECTIVE FIELDS:\n" + ", ".join(defective)
+                    )
+                    fixed = call_llm_text(FIELD_FIX_PROMPT, repair_input, max_tokens=1800)
+                    local_val_3 = local_validate(fixed)
+
                     llm_val_3 = None
-                validation_3 = merge_validation(local_val_3, llm_val_3)
-                st.session_state["mt700"] = fixed
-                st.session_state["validation"] = validation_3
-                st.session_state["score"] = calculate_score(fixed, validation_3)
-                st.rerun()
+                    try:
+                        llm_val_3 = call_llm_json(VAL_PROMPT, fixed, VALIDATION_SCHEMA, max_tokens=1000)
+                        if not llm_val_3:
+                            llm_val_3 = None
+                    except Exception:
+                        llm_val_3 = None
+
+                    validation_3 = merge_validation(local_val_3, llm_val_3)
+                    st.session_state["mt700"] = fixed
+                    st.session_state["validation"] = validation_3
+                    st.session_state["score"] = calculate_score(fixed, validation_3)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Fallo regenerando campos defectuosos: {str(e)}")
 
     with col_b:
         if st.button("✅ Aprobar"):
