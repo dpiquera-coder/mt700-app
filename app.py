@@ -1513,12 +1513,7 @@ if st.button("🚀 Generar MT700"):
                             mode = "unknown"
                     txt = clean_text(txt)
                     full_parts.append(f"### {f.name}\n{txt}")
-                    debug.append({
-                        "file": f.name,
-                        "mode": mode,
-                        "chars": len(txt),
-                        "preview": txt[:1200]
-                    })
+                    debug.append({"file": f.name, "mode": mode, "chars": len(txt), "preview": txt[:1200]})
                 source_text = "\n\n".join(full_parts)
 
             with st.expander("🧪 Debug extracción", expanded=False):
@@ -1574,4 +1569,39 @@ if "mt700" in st.session_state:
         st.json(st.session_state.get("verified_map", {}))
         st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:12000], height=320)
 
-    col1, col2 = st.columns([2, 1]
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.text_area("📡 MT700", st.session_state["mt700"], height=700)
+
+    with col2:
+        st.metric("Confianza", f"{st.session_state['validation']['score']}%")
+        st.json(st.session_state["validation"])
+
+    with st.expander("🧾 Evidencia por campo", expanded=False):
+        st.json(extraction_table_rows(st.session_state["verified_map"]))
+
+    txt_data = st.session_state["mt700"].encode("utf-8")
+    json_data = json.dumps({
+        "raw_extraction": st.session_state["raw_extraction"],
+        "direct_ocr_map": st.session_state.get("direct_ocr_map", {}),
+        "verified_map": st.session_state["verified_map"],
+        "audit": st.session_state["audit"],
+        "validation": st.session_state["validation"]
+    }, ensure_ascii=False, indent=2).encode("utf-8")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button(
+            "⬇️ Descargar MT700 TXT",
+            txt_data,
+            file_name="MT700_ANTI_HALLUCINATION_V69.txt",
+            mime="text/plain"
+        )
+    with c2:
+        st.download_button(
+            "⬇️ Descargar auditoría JSON",
+            json_data,
+            file_name="MT700_AUDIT_V69.json",
+            mime="application/json"
+        )
