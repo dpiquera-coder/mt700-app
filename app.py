@@ -28,8 +28,8 @@ try:
 except Exception:
     pytesseract = None
 
-st.set_page_config(page_title="MT700 Generator v5.1", layout="wide")
-st.title("📡 MT700 Generator - Trade Finance v5.1 (strict MT700 mapping)")
+st.set_page_config(page_title="MT700 Generator v5.2", layout="wide")
+st.title("📡 MT700 Generator - Trade Finance v5.2 (strict mapping + narrative repair)")
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
@@ -127,6 +127,24 @@ Use the style guide exactly.
 Respect the semantic type of each field.
 Do not output any disallowed tags.
 Narrative fields must be in English.
+"""
+
+NARRATIVE_FIX_PROMPT = """
+You are a senior Trade Finance SWIFT MT700 narrative repair specialist.
+
+You will receive:
+1. the full MT700
+2. the defective narrative fields
+3. the source document text
+
+Return ONLY the full corrected MT700 in SWIFT format.
+
+Rules:
+- Correct only the specified narrative fields.
+- Keep all other fields unchanged.
+- Narrative fields must be in professional banking English.
+- Preserve factual content, addresses, references, amounts, dates, bank names and BICs.
+- Do not add or remove SWIFT tags.
 """
 
 SCHEMA = {
@@ -388,6 +406,22 @@ def validate_mt700(mt700: str) -> Dict:
         "defective_fields": sorted(set(defective_fields))
     }
 
+def repair_narrative_fields(mt700: str, defective_fields: List[str], source_text: str) -> str:
+    if not defective_fields:
+        return mt700
+
+    repair_input = (
+        "SOURCE DOCUMENTS:\n" + source_text[:30000] +
+        "\n\nCURRENT MT700:\n" + mt700 +
+        "\n\nDEFECTIVE NARRATIVE FIELDS:\n" + ", ".join(defective_fields)
+    )
+
+    try:
+        repaired = call_llm_text(NARRATIVE_FIX_PROMPT, repair_input, max_tokens=2200)
+        return repaired.strip() if repaired.strip() else mt700
+    except Exception:
+        return mt700
+
 if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
 
@@ -465,6 +499,19 @@ if st.button("🚀 Generar MT700"):
         )
 
         validation = validate_mt700(mt700)
+
+        narrative_problem_fields = [
+            f for f in validation.get("defective_fields", [])
+            if f in ["45A", "46A", "47A", "71D", "78", "72Z"]
+        ]
+
+        if narrative_problem_fields:
+            repaired_mt700 = repair_narrative_fields(mt700, narrative_problem_fields, source_text)
+            repaired_validation = validate_mt700(repaired_mt700)
+
+            if repaired_validation["score"] >= validation["score"]:
+                mt700 = repaired_mt700
+                validation = repaired_validation
 
         st.session_state["source_text"] = source_text
         st.session_state["field_map"] = field_map
