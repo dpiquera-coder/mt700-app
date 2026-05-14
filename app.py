@@ -29,7 +29,7 @@ except Exception:
     pytesseract = None
 
 st.set_page_config(
-    page_title="MT700 Generator v5.6",
+    page_title="MT700 Generator v5.4",
     layout="wide",
     page_icon="🏦"
 )
@@ -47,13 +47,16 @@ st.markdown(f"""
     --santander-light: {SANTANDER_LIGHT};
     --santander-border: {SANTANDER_BORDER};
 }}
+
 .block-container {{
     padding-top: 1.5rem;
     padding-bottom: 2rem;
 }}
+
 .main {{
     background: linear-gradient(180deg, #fff 0%, #fff7f7 100%);
 }}
+
 [data-testid="stMetric"] {{
     background: white;
     border: 1px solid var(--santander-border);
@@ -61,6 +64,12 @@ st.markdown(f"""
     padding: 14px 18px;
     box-shadow: 0 4px 18px rgba(236, 0, 0, 0.06);
 }}
+
+[data-testid="stMetric"] label,
+[data-testid="stMetricValue"] {{
+    color: #222 !important;
+}}
+
 .stButton > button,
 .stDownloadButton > button {{
     background: var(--santander-red);
@@ -70,24 +79,33 @@ st.markdown(f"""
     padding: 0.6rem 1rem;
     font-weight: 600;
 }}
+
 .stButton > button:hover,
 .stDownloadButton > button:hover {{
     background: var(--santander-dark-red);
     color: white;
 }}
+
 div[data-testid="stExpander"] {{
     border: 1px solid #f0d6d6;
     border-radius: 12px;
     background: #fffdfd;
     box-shadow: 0 2px 10px rgba(236, 0, 0, 0.04);
 }}
+
 div[data-testid="stExpander"] details summary {{
     font-weight: 600;
     color: #5c1111;
 }}
+
 textarea, .stTextArea textarea {{
     border-radius: 10px !important;
 }}
+
+.stAlert {{
+    border-radius: 12px;
+}}
+
 .mt700-hero {{
     background: linear-gradient(135deg, {SANTANDER_RED} 0%, #ff3b30 100%);
     color: white;
@@ -96,11 +114,13 @@ textarea, .stTextArea textarea {{
     margin-bottom: 1rem;
     box-shadow: 0 12px 30px rgba(236, 0, 0, 0.18);
 }}
+
 .mt700-hero-row {{
     display: flex;
     align-items: center;
     gap: 16px;
 }}
+
 .mt700-logo {{
     width: 52px;
     height: 52px;
@@ -109,28 +129,46 @@ textarea, .stTextArea textarea {{
     display: flex;
     align-items: center;
     justify-content: center;
+    backdrop-filter: blur(6px);
+    flex-shrink: 0;
 }}
+
 .mt700-logo svg {{
     width: 34px;
     height: 34px;
     fill: white;
 }}
+
 .mt700-title {{
     font-size: 1.7rem;
     font-weight: 700;
     margin: 0;
     line-height: 1.1;
 }}
+
 .mt700-subtitle {{
     margin: 0.25rem 0 0 0;
     opacity: 0.92;
     font-size: 0.98rem;
 }}
+
 .section-title {{
     color: {SANTANDER_DARK_RED};
     font-weight: 700;
     margin-top: 0.5rem;
     margin-bottom: 0.35rem;
+}}
+
+.soft-card {{
+    background: white;
+    border: 1px solid var(--santander-border);
+    border-radius: 14px;
+    padding: 14px 16px;
+    margin-bottom: 1rem;
+}}
+
+code {{
+    color: var(--santander-dark-red);
 }}
 </style>
 """, unsafe_allow_html=True)
@@ -146,15 +184,15 @@ st.markdown("""
       </svg>
     </div>
     <div>
-      <p class="mt700-title">MT700 GENERATOR</p>
-      <p class="mt700-subtitle">STRICT SWIFT MAPPING, ENGLISH NARRATIVE REPAIR AND DOCUMENT-GROUNDED EXTRACTION</p>
+      <p class="mt700-title">MT700 Generator</p>
+      <p class="mt700-subtitle">Trade Finance assistant with strict SWIFT mapping, validation and English narrative repair</p>
     </div>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-files = st.file_uploader("SUBE DOCUMENTOS", accept_multiple_files=True)
+files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 
 ALLOWED_TAGS = [
     "27", "20", "40A", "40E", "31C", "31D", "50", "59", "32B", "39A", "41A", "42C",
@@ -169,26 +207,15 @@ FIELD_KEYS = [
     "field_78", "field_72Z"
 ]
 
-FIELD_TO_TAG = {
-    "field_27": "27", "field_20": "20", "field_40A": "40A", "field_40E": "40E",
-    "field_31C": "31C", "field_31D": "31D", "field_50": "50", "field_59": "59",
-    "field_32B": "32B", "field_39A": "39A", "field_41A": "41A", "field_42C": "42C",
-    "field_43P": "43P", "field_43T": "43T", "field_44E": "44E", "field_44F": "44F",
-    "field_44C": "44C", "field_45A": "45A", "field_46A": "46A", "field_47A": "47A",
-    "field_48": "48", "field_49": "49", "field_57A": "57A", "field_71D": "71D",
-    "field_78": "78", "field_72Z": "72Z"
-}
-
 NARRATIVE_TAGS = ["45A", "46A", "47A", "71D", "78", "72Z"]
 
 SPANISH_HINT_WORDS = [
-    "FACTURA", "CONOCIMIENTO", "CARTA DE PORTE", "POLIZA", "PÓLIZA",
-    "CERTIFICADO", "SEGUN", "SEGÚN", "MERCANCIA", "MERCANCÍA",
-    "BENEFICIARIO", "SOLICITANTE", "VENCIMIENTO", "EJEMPLARES",
-    "HOJA ADJUNTA", "CARGADOR", "CONSIGNATARIO",
-    "POR CORREO", "ENVIAR DOCUMENTOS", "GASTOS BANCARIOS",
-    "FUERA DE ESPAÑA", "A CARGO DEL BENEFICIARIO",
-    "EMITIDO POR", "A FAVOR DE", "SI HUBIERA"
+    "factura", "conocimiento", "carta de porte", "poliza", "póliza",
+    "certificado", "segun", "según", "mercancia", "mercancía",
+    "beneficiario", "solicitante", "vencimiento", "ejemplares",
+    "hoja adjunta", "cargador", "consignatario",
+    "por correo", "enviar documentos", "gastos bancarios",
+    "fuera de españa", "a cargo del beneficiario"
 ]
 
 SPANISH_TO_ENGLISH_REPLACEMENTS = {
@@ -222,67 +249,111 @@ SPANISH_TO_ENGLISH_REPLACEMENTS = {
 }
 
 EXPECTED_GUIDE = """
-EXPECTED MT700 STYLE GUIDE:
-- USE ONLY DOCUMENT-SUPPORTED VALUES.
-- NEVER INVENT DATA.
-- NEVER COPY EXAMPLE VALUES FROM THE PROMPT.
-- IF A FIELD IS NOT SUPPORTED BY THE DOCUMENT, RETURN IT EMPTY/NULL IN EXTRACTION.
-- FINAL MT700 MUST BE UPPERCASE.
+Expected MT700 style guide:
+
+- :27: sequence, e.g. 1/1
+- :20: documentary credit number / LC reference
+- :40A: form of documentary credit, e.g. IRREVOCABLE
+- :40E: applicable rules, e.g. UCP LATEST VERSION
+- :31C: issue date in YYMMDD
+- :31D: expiry date in YYMMDD immediately followed by expiry place, e.g. 260621HONG KONG
+- :50: applicant name and address
+- :59: beneficiary name and address
+- :32B: currency + amount only, e.g. USD33998,64
+- :39A: tolerance only, e.g. 10/10
+- :41A: available with bank BIC + method, e.g. BSCHHKHHXXXX / BY PAYMENT
+- :42C: drafts at...
+- :43P: ALLOWED / NOT ALLOWED
+- :43T: ALLOWED / NOT ALLOWED
+- :44E: port of loading / place of receipt
+- :44F: port of discharge / final destination
+- :44C: latest shipment date in YYMMDD
+- :45A: goods description in English
+- :46A: documents required in English
+- :47A: additional conditions in English
+- :48: presentation period, e.g. 21/AFTER SHIPMENT DATE
+- :49: confirmation instructions, e.g. WITHOUT
+- :57A: advising / routed bank BIC
+- :71D: charges clause in English
+- :78: instructions to paying / negotiating bank in English
+- :72Z: sender to receiver information in English
+
+Hard prohibitions:
+- Do NOT output :41B:, :41C:, :41D:
+- Do NOT place names/addresses in :32B:
+- Do NOT place amounts in :50:, :59:, :71D:, :72Z:, :48:, :49:
+- Do NOT place beneficiary name in :40A:
+- Do NOT place addresses in :40E:
+- Final output should be uppercase.
 """
 
 STRUCTURED_EXTRACTION_PROMPT = """
-YOU ARE A SENIOR TRADE FINANCE DATA EXTRACTION ENGINE.
+You are a senior Trade Finance data extraction engine.
 
-EXTRACT FACTUAL VALUES FROM THE PROVIDED DOCUMENTS INTO THE TARGET MT700 FIELD MAP.
-RETURN JSON ONLY.
+Extract factual values from the provided documents into the target MT700 field map.
+Return JSON only.
 
-STRICT GROUNDING RULES:
-- USE ONLY THE DOCUMENT TEXT PROVIDED.
-- DO NOT USE PRIOR KNOWLEDGE.
-- DO NOT USE EXAMPLES FROM THE PROMPT AS REAL VALUES.
-- DO NOT GUESS.
-- DO NOT INFER UNSUPPORTED FACTS.
-- IF A VALUE IS NOT EXPLICITLY SUPPORTED BY THE DOCUMENT, RETURN NULL.
-- FOR EACH FIELD, RETURN:
-  - VALUE
-  - EVIDENCE (EXACT DOCUMENT SNIPPET SUPPORTING THE VALUE)
-  - CONFIDENCE (0 TO 1)
+Rules:
+- Use null if not found.
+- Preserve factual values, references, bank names, BICs, addresses, dates, ports, amounts.
+- Convert narrative wording to concise English where needed.
+- Do not guess a value if unsupported.
+- Do not invent SWIFT tags outside the requested schema.
+- Use the expected MT700 style guide supplied by the user.
 
-EVIDENCE MUST COME FROM THE DOCUMENT TEXT.
-IF THERE IS NO SUPPORTING EVIDENCE, VALUE MUST BE NULL.
+Field meaning constraints:
+- field_20 = LC reference / documentary credit number
+- field_40A = IRREVOCABLE / REVOCABLE style form only
+- field_40E = applicable rules only
+- field_32B = currency+amount only
+- field_39A = tolerance only
+- field_48 = presentation period only
+- field_49 = confirmation instruction only
+- field_71D = charges clause only
 """
 
 GENERATION_PROMPT = """
-YOU ARE A SENIOR TRADE FINANCE OFFICER SPECIALIZED IN SWIFT MT700.
+You are a senior Trade Finance officer specialized in SWIFT MT700.
 
-GENERATE ONE FINAL MT700 IN SWIFT FORMAT FROM THE STRUCTURED FIELD MAP.
-RETURN ONLY THE MT700. NO COMMENTARY. NO MARKDOWN.
+Generate one final MT700 in SWIFT format from the structured field map.
+Return ONLY the MT700. No commentary. No markdown.
 
-RULES:
-- USE ONLY VALUES PRESENT IN THE PROVIDED STRUCTURED FIELD MAP.
-- DO NOT INVENT OR COMPLETE MISSING VALUES.
-- DO NOT USE EXAMPLES AS CONTENT.
-- IF A FIELD IS EMPTY, LEAVE IT OUT OF THE GENERATED DRAFT; DO NOT GUESS.
-- FINAL OUTPUT MUST BE FULLY UPPERCASE.
-- NARRATIVE FIELDS MUST BE IN ENGLISH.
+Use the style guide exactly.
+Respect the semantic type of each field.
+Do not output any disallowed tags.
+Narrative fields must be in English.
+Final output must be fully uppercase.
 """
 
 NARRATIVE_TRANSLATION_PROMPT = """
-YOU ARE A SENIOR TRADE FINANCE BANKING TRANSLATOR.
+You are a senior Trade Finance banking translator.
 
-TRANSLATE ONLY THE PROVIDED MT700 NARRATIVE FIELD VALUES INTO PROFESSIONAL BANKING ENGLISH.
-RETURN JSON ONLY.
+Translate ONLY the provided MT700 narrative field values into professional banking English.
+Return JSON only.
 
-RULES:
-- INPUT FIELDS ARE MT700 NARRATIVE TAGS AND THEIR CURRENT VALUES.
-- PRESERVE FACTUAL CONTENT: AMOUNTS, PERCENTAGES, REFERENCES, ADDRESSES, BANK NAMES, BICS, DATES, PHONE NUMBERS, COMPANY NAMES.
-- TRANSLATE WORDING ONLY.
-- DO NOT ADD NEW FACTS.
-- DO NOT OMIT FACTS.
-- KEEP SWIFT-STYLE CONCISE BANKING LANGUAGE.
-- RETURN EXACTLY THE SAME KEYS YOU RECEIVED.
-- RETURN VALUES IN UPPERCASE.
+Rules:
+- Input fields are MT700 narrative tags and their current values.
+- Preserve factual content: amounts, percentages, references, addresses, bank names, BICs, dates, phone numbers, company names.
+- Translate wording only.
+- Do not add new facts.
+- Do not omit facts.
+- Keep SWIFT-style concise banking language.
+- Return exactly the same keys you received.
+- Return values in uppercase.
 """
+
+NARRATIVE_TRANSLATION_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "mt700_narrative_translation",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {tag: {"type": "string"} for tag in NARRATIVE_TAGS},
+            "additionalProperties": False
+        }
+    }
+}
 
 SCHEMA = {
     "type": "json_schema",
@@ -291,19 +362,7 @@ SCHEMA = {
         "strict": True,
         "schema": {
             "type": "object",
-            "properties": {
-                k: {
-                    "type": "object",
-                    "properties": {
-                        "value": {"type": ["string", "null"]},
-                        "evidence": {"type": "string"},
-                        "confidence": {"type": ["number", "null"]}
-                    },
-                    "required": ["value", "evidence", "confidence"],
-                    "additionalProperties": False
-                }
-                for k in FIELD_KEYS
-            },
+            "properties": {k: {"type": ["string", "null"]} for k in FIELD_KEYS},
             "required": FIELD_KEYS,
             "additionalProperties": False
         }
@@ -340,7 +399,7 @@ def safe_str_value(value) -> str:
             item = safe_str_value(item)
             if item:
                 parts.append(item)
-        return "\n".join(parts).strip()
+        return "\\n".join(parts).strip()
     if isinstance(value, dict):
         try:
             return json.dumps(value, ensure_ascii=False).strip()
@@ -348,41 +407,18 @@ def safe_str_value(value) -> str:
             return str(value).strip()
     return str(value).strip()
 
-def force_uppercase_mt700(text: str) -> str:
+def force_uppercase(text: str) -> str:
     return safe_str_value(text).upper()
 
 def clean_spanish_artifacts(text: str) -> str:
-    result = safe_str_value(text).upper()
+    result = force_uppercase(text)
     for es, en in sorted(SPANISH_TO_ENGLISH_REPLACEMENTS.items(), key=lambda x: len(x[0]), reverse=True):
-        result = re.sub(rf"\b{re.escape(es)}\b", en, result)
-    result = re.sub(r"\s{2,}", " ", result)
-    result = re.sub(r" *\n *", "\n", result)
+        result = re.sub(rf"\\b{re.escape(es)}\\b", en, result)
+    result = re.sub(r"[ ]{2,}", " ", result)
+    result = re.sub(r" *\\n *", "\\n", result)
     return result.strip()
 
-def normalize_for_match(text: str) -> str:
-    text = safe_str_value(text).upper()
-    text = re.sub(r"[^A-Z0-9\s,./:%()-]", " ", text)
-    text = re.sub(r"\s+", " ", text)
-    return text.strip()
-
-def evidence_supports_value(value: str, evidence: str, source_text: str) -> bool:
-    value_n = normalize_for_match(value)
-    evidence_n = normalize_for_match(evidence)
-    source_n = normalize_for_match(source_text)
-
-    if not value_n or not evidence_n:
-        return False
-    if evidence_n not in source_n:
-        return False
-
-    tokens = [t for t in re.split(r"\s+", value_n) if t]
-    if not tokens:
-        return False
-
-    matched = sum(1 for t in tokens if t in evidence_n)
-    return (matched / len(tokens)) >= 0.6
-
-def call_llm_json(system_prompt: str, user_text: str, schema: Dict, max_tokens: int = 1800) -> Dict:
+def call_llm_json(system_prompt: str, user_text: str, schema: Dict, max_tokens: int = 1600) -> Dict:
     try:
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
@@ -392,19 +428,19 @@ def call_llm_json(system_prompt: str, user_text: str, schema: Dict, max_tokens: 
             ],
             response_format=schema,
             max_tokens=max_tokens,
-            temperature=0.0
+            temperature=0.05
         )
         return safe_json_load(response.choices[0].message.content or "{}")
     except Exception:
         response = client.chat.completions.create(
             model="llama-3.1-8b-instant",
             messages=[
-                {"role": "system", "content": system_prompt + "\nRETURN ONLY VALID JSON."},
+                {"role": "system", "content": system_prompt + "\\nReturn only valid JSON."},
                 {"role": "user", "content": user_text}
             ],
             response_format={"type": "json_object"},
             max_tokens=max_tokens,
-            temperature=0.0
+            temperature=0.05
         )
         return safe_json_load(response.choices[0].message.content or "{}")
 
@@ -421,11 +457,11 @@ def call_llm_text(system_prompt: str, user_text: str, max_tokens: int = 2200) ->
     return response.choices[0].message.content or ""
 
 def clean_text(text: str) -> str:
-    text = text.replace("\xa0", " ")
-    text = "".join(c for c in text if c.isprintable() or c in "\n\t")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text[:70000].strip()
+    text = text.replace("\\xa0", " ")
+    text = "".join(c for c in text if c.isprintable() or c in "\\n\\t")
+    text = re.sub(r"[ \\t]+", " ", text)
+    text = re.sub(r"\\n{3,}", "\\n\\n", text)
+    return text[:50000].strip()
 
 def extract_doc_legacy(data: bytes) -> str:
     try:
@@ -450,45 +486,18 @@ def extract_pdf_ocr_all_pages(data: bytes) -> str:
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             txt = pytesseract.image_to_string(img, lang="spa+eng")
-            out.append(f"==PAGE {i+1}==\n{txt}")
-        return "\n\n".join(out)
+            out.append(f"==PAGE {i+1}==\\n{txt}")
+        return "\\n\\n".join(out)
     except Exception:
         return ""
 
-def ground_field_map(field_map_raw: Dict, source_text: str) -> Dict:
-    grounded = {}
-    for key in FIELD_KEYS:
-        item = field_map_raw.get(key, {}) if isinstance(field_map_raw, dict) else {}
-        value = safe_str_value(item.get("value")) if isinstance(item, dict) else ""
-        evidence = safe_str_value(item.get("evidence")) if isinstance(item, dict) else ""
-        confidence = item.get("confidence", 0) if isinstance(item, dict) else 0
-
-        try:
-            confidence = float(confidence) if confidence is not None else 0.0
-        except Exception:
-            confidence = 0.0
-
-        is_grounded = False
-        if value and evidence:
-            is_grounded = evidence_supports_value(value, evidence, source_text)
-
-        grounded[key] = {
-            "value": value if is_grounded else "",
-            "evidence": evidence,
-            "confidence": round(confidence, 3) if is_grounded else 0.0,
-            "grounded": is_grounded
-        }
-    return grounded
-
-def normalize_field_map(grounded_map: Dict) -> Dict:
-    if not isinstance(grounded_map, dict):
+def normalize_field_map(data: Dict) -> Dict:
+    if not isinstance(data, dict):
         return {k: "" for k in FIELD_KEYS}
 
     normalized = {}
     for key in FIELD_KEYS:
-        item = grounded_map.get(key, {})
-        value = safe_str_value(item.get("value")) if isinstance(item, dict) and item.get("grounded") else ""
-        normalized[key] = clean_spanish_artifacts(value)
+        normalized[key] = clean_spanish_artifacts(safe_str_value(data.get(key)))
 
     if not normalized.get("field_27"):
         normalized["field_27"] = "1/1"
@@ -505,7 +514,7 @@ def normalize_field_map(grounded_map: Dict) -> Dict:
 
     if normalized.get("field_32B"):
         v = normalized["field_32B"].replace(" ", "")
-        v = re.sub(r"^(USD|EUR|GBP)\s*([0-9].*)$", r"\1\2", v)
+        v = re.sub(r"^(USD|EUR|GBP)\\s*([0-9].*)$", r"\\1\\2", v)
         normalized["field_32B"] = v
 
     if normalized.get("field_43P"):
@@ -545,14 +554,14 @@ def build_mt700_from_map(m: Dict) -> str:
             lines.append(f":{tag}:{value}")
 
     lines.append("-}")
-    return force_uppercase_mt700("\n".join(lines))
+    return "\\n".join(lines).upper()
 
 def parse_mt700_fields(mt700: str) -> Dict[str, str]:
-    pattern = re.compile(r"(?ms)^:([0-9]{2}[A-Z]?):(.*?)(?=^:[0-9]{2}[A-Z]?:|^-}\s*$|\Z)")
+    pattern = re.compile(r"(?ms)^:([0-9]{2}[A-Z]?):(.*?)(?=^:[0-9]{2}[A-Z]?:|^-}\\s*$|\\Z)")
     return {tag: value.strip() for tag, value in pattern.findall(mt700 or "")}
 
 def contains_spanish_narrative(text: str) -> bool:
-    t = safe_str_value(text).upper()
+    t = (text or "").lower()
     return any(word in t for word in SPANISH_HINT_WORDS)
 
 def validate_mt700(mt700: str) -> Dict:
@@ -561,16 +570,40 @@ def validate_mt700(mt700: str) -> Dict:
 
     for tag in ALLOWED_TAGS:
         if tag not in fields or not fields[tag].strip():
-            issues.append(f"MISSING OR EMPTY FIELD :{tag}:")
+            issues.append(f"Missing or empty field :{tag}:")
 
     forbidden = re.findall(r"^:([0-9]{2}[A-Z]?):", mt700 or "", re.M)
     for tag in forbidden:
         if tag not in ALLOWED_TAGS:
-            issues.append(f"FORBIDDEN TAG DETECTED :{tag}:")
+            issues.append(f"Forbidden tag detected :{tag}:")
+
+    if "32B" in fields and not re.match(r"^[A-Z]{3}[0-9,\\.]+$", fields["32B"].replace(" ", "")):
+        issues.append(":32B: must contain currency and amount only")
+
+    if "40A" in fields and fields["40A"].upper() not in ["IRREVOCABLE", "REVOCABLE"]:
+        issues.append(":40A: must be form of documentary credit only")
+
+    if "40E" in fields and len(fields["40E"]) > 80 and "," in fields["40E"]:
+        issues.append(":40E: appears to contain address-like content")
+
+    if "48" in fields and "%" in fields["48"]:
+        issues.append(":48: cannot contain percentage value")
+
+    if "49" in fields and "%" in fields["49"]:
+        issues.append(":49: cannot contain percentage value")
+
+    if "71D" in fields and re.fullmatch(r"[0-9,\\.]+", fields["71D"].strip()):
+        issues.append(":71D: cannot be numeric only")
+
+    if "50" in fields and re.fullmatch(r"[0-9,\\.]+", fields["50"].strip()):
+        issues.append(":50: cannot be numeric only")
+
+    if "59" in fields and re.fullmatch(r"[0-9,\\.]+", fields["59"].strip()):
+        issues.append(":59: cannot be numeric only")
 
     for tag in NARRATIVE_TAGS:
         if tag in fields and contains_spanish_narrative(fields[tag]):
-            warnings.append(f":{tag}: CONTAINS NON-ENGLISH WORDING")
+            warnings.append(f":{tag}: contains non-English wording")
 
     score = 100 - min(70, len(issues) * 8) - min(20, len(warnings) * 3)
     score = max(score, 0)
@@ -612,8 +645,8 @@ def translate_narrative_fields(mt700: str, defective_fields: List[str], source_t
     }
 
     user_text = (
-        "SOURCE DOCUMENTS:\n" + force_uppercase_mt700(source_text[:20000]) +
-        "\n\nCURRENT NARRATIVE FIELD VALUES:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
+        "SOURCE DOCUMENTS:\\n" + source_text[:20000] +
+        "\\n\\nCURRENT NARRATIVE FIELD VALUES:\\n" + json.dumps(payload, ensure_ascii=False, indent=2)
     )
 
     translated = call_llm_json(NARRATIVE_TRANSLATION_PROMPT, user_text, schema, max_tokens=1200)
@@ -623,26 +656,26 @@ def replace_mt700_fields(mt700: str, replacements: Dict[str, str]) -> str:
     if not replacements:
         return mt700
 
-    pattern = re.compile(r"(?ms)^:([0-9]{2}[A-Z]?):(.*?)(?=^:[0-9]{2}[A-Z]?:|^-}\s*$|\Z)")
+    pattern = re.compile(r"(?ms)^:([0-9]{2}[A-Z]?):(.*?)(?=^:[0-9]{2}[A-Z]?:|^-}\\s*$|\\Z)")
 
     def repl(match):
         tag = match.group(1)
         old_value = match.group(2)
         if tag in replacements and replacements[tag].strip():
             new_value = clean_spanish_artifacts(replacements[tag])
-            return f":{tag}:{new_value}\n"
+            return f":{tag}:{new_value}\\n"
         return f":{tag}:{old_value}"
 
     result = pattern.sub(repl, mt700)
-    result = re.sub(r"\n-}$", "\n-}", result)
-    return force_uppercase_mt700(result)
+    result = re.sub(r"\\n-}$", "\\n-}", result)
+    return result.upper()
 
 def final_cleanup_mt700(mt700: str) -> str:
     parsed = parse_mt700_fields(mt700)
     rebuilt = []
-    header_match = re.match(r"(?s)^(.*?\{4:\n)", mt700)
-    header = header_match.group(1) if header_match else "{1:F01BSCHESMMXXXX0123000001}{2:I700BSCHHKHHXXXXN2020}{4:\n"
-    rebuilt.append(header.rstrip("\n"))
+    header_match = re.match(r"(?s)^(.*?\\{4:\\n)", mt700)
+    header = header_match.group(1) if header_match else "{1:F01BSCHESMMXXXX0123000001}{2:I700BSCHHKHHXXXXN2020}{4:\\n"
+    rebuilt.append(header.rstrip("\\n"))
 
     for tag in ALLOWED_TAGS:
         if tag in parsed and parsed[tag].strip():
@@ -650,30 +683,16 @@ def final_cleanup_mt700(mt700: str) -> str:
             rebuilt.append(f":{tag}:{value}")
 
     rebuilt.append("-}")
-    return force_uppercase_mt700("\n".join(rebuilt))
-
-def grounding_report(grounded_map: Dict) -> List[Dict]:
-    rows = []
-    for key in FIELD_KEYS:
-        item = grounded_map.get(key, {})
-        rows.append({
-            "field": key,
-            "tag": FIELD_TO_TAG[key],
-            "grounded": item.get("grounded", False),
-            "confidence": item.get("confidence", 0),
-            "value": item.get("value", ""),
-            "evidence": item.get("evidence", "")
-        })
-    return rows
+    return "\\n".join(rebuilt).upper()
 
 if not tesseract_available():
-    st.info("OCR NO DISPONIBLE EN ESTE ENTORNO. INSTALA TESSERACT-OCR Y TESSERACT-OCR-SPA PARA PDF ESCANEADOS.")
+    st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
 
-st.markdown('<p class="section-title">INPUT DOCUMENTS</p>', unsafe_allow_html=True)
+st.markdown('<p class="section-title">Input documents</p>', unsafe_allow_html=True)
 
-if st.button("🚀 GENERAR MT700"):
+if st.button("🚀 Generar MT700"):
     if not files:
-        st.warning("SUBE DOCUMENTOS")
+        st.warning("Sube documentos")
     else:
         full_parts = []
         debug = []
@@ -689,7 +708,7 @@ if st.button("🚀 GENERAR MT700"):
             elif name.endswith(".docx"):
                 try:
                     d = docx.Document(BytesIO(data))
-                    txt = "\n".join(p.text for p in d.paragraphs)
+                    txt = "\\n".join(p.text for p in d.paragraphs)
                     mode = "docx"
                 except Exception:
                     txt = ""
@@ -706,7 +725,7 @@ if st.button("🚀 GENERAR MT700"):
                     mode = "unknown"
 
             txt = clean_text(txt)
-            full_parts.append(f"### {f.name}\n{txt}")
+            full_parts.append(f"### {f.name}\\n{txt}")
             debug.append({
                 "file": f.name,
                 "mode": mode,
@@ -714,25 +733,22 @@ if st.button("🚀 GENERAR MT700"):
                 "preview": txt[:800]
             })
 
-        source_text = "\n\n".join(full_parts)
+        source_text = "\\n\\n".join(full_parts)
 
-        with st.expander("🧪 DEBUG EXTRACCIÓN", expanded=False):
+        with st.expander("🧪 Debug extracción", expanded=False):
             st.json(debug)
-            st.text_area("TEXTO FUENTE", source_text[:5000], height=300)
+            st.text_area("Texto fuente", source_text[:5000], height=300)
 
-        user_payload = EXPECTED_GUIDE + "\n\nSOURCE DOCUMENTS:\n" + source_text[:30000]
+        user_payload = EXPECTED_GUIDE + "\\n\\nSOURCE DOCUMENTS:\\n" + source_text[:30000]
 
-        field_map_raw = call_llm_json(STRUCTURED_EXTRACTION_PROMPT, user_payload, SCHEMA, max_tokens=1800)
-        grounded_map = ground_field_map(field_map_raw, source_text)
-        field_map = normalize_field_map(grounded_map)
+        field_map_raw = call_llm_json(STRUCTURED_EXTRACTION_PROMPT, user_payload, SCHEMA, max_tokens=1600)
+        field_map = normalize_field_map(field_map_raw)
 
-        with st.expander("🧪 FIELD MAP RAW", expanded=False):
-            st.json(field_map_raw)
+        with st.expander("🧪 Tipos del field_map", expanded=False):
+            type_debug = {k: str(type(v)) for k, v in field_map_raw.items()} if isinstance(field_map_raw, dict) else {}
+            st.json(type_debug)
 
-        with st.expander("🛡️ GROUNDING REPORT", expanded=False):
-            st.dataframe(grounding_report(grounded_map), use_container_width=True)
-
-        with st.expander("🧩 FIELD MAP NORMALIZADO", expanded=False):
+        with st.expander("🧩 Field map estructurado", expanded=False):
             st.json(field_map)
 
         seed_mt700 = build_mt700_from_map(field_map)
@@ -740,9 +756,9 @@ if st.button("🚀 GENERAR MT700"):
         mt700 = call_llm_text(
             GENERATION_PROMPT,
             EXPECTED_GUIDE
-            + "\n\nSTRUCTURED FIELD MAP:\n"
+            + "\\n\\nSTRUCTURED FIELD MAP:\\n"
             + json.dumps(field_map, ensure_ascii=False, indent=2)
-            + "\n\nSEED MT700:\n"
+            + "\\n\\nSEED MT700:\\n"
             + seed_mt700,
             max_tokens=2200
         )
@@ -770,40 +786,35 @@ if st.button("🚀 GENERAR MT700"):
         validation = validate_mt700(mt700)
 
         st.session_state["source_text"] = source_text
-        st.session_state["field_map_raw"] = field_map_raw
-        st.session_state["grounded_map"] = grounded_map
         st.session_state["field_map"] = field_map
+        st.session_state["field_map_raw"] = field_map_raw
         st.session_state["translated_fields"] = translated_fields
         st.session_state["mt700"] = mt700
         st.session_state["validation"] = validation
-        st.success("✅ GENERADO")
+        st.success("✅ Generado")
 
 if "mt700" in st.session_state:
-    st.markdown('<p class="section-title">RESULT</p>', unsafe_allow_html=True)
+    with st.expander("🧪 Debug persistido", expanded=False):
+        st.json(st.session_state.get("field_map_raw", {}))
+        st.json(st.session_state.get("field_map", {}))
+        st.json(st.session_state.get("translated_fields", {}))
+        st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:5000], height=280)
 
     col1, col2 = st.columns([2, 1])
     with col1:
         edited = st.text_area("📡 MT700", st.session_state["mt700"], height=650)
     with col2:
-        st.metric("CONFIANZA", f"{st.session_state['validation']['score']}%")
+        st.metric("Confianza", f"{st.session_state['validation']['score']}%")
         st.json(st.session_state["validation"])
 
     parsed = parse_mt700_fields(edited)
 
-    with st.expander("🧪 DEBUG PERSISTIDO", expanded=False):
-        st.json(st.session_state.get("field_map_raw", {}))
-        st.json(st.session_state.get("grounded_map", {}))
-        st.json(st.session_state.get("field_map", {}))
-        st.json(st.session_state.get("translated_fields", {}))
-        st.text_area("TEXTO FUENTE PERSISTIDO", st.session_state.get("source_text", "")[:5000], height=280)
-
-    with st.expander("🧩 CAMPOS PARSEADOS", expanded=False):
+    with st.expander("🧩 Campos parseados", expanded=False):
         st.json(parsed)
 
-    txt_data = force_uppercase_mt700(edited).encode("utf-8")
+    txt_data = edited.upper().encode("utf-8")
     json_data = json.dumps({
         "field_map_raw": st.session_state["field_map_raw"],
-        "grounded_map": st.session_state["grounded_map"],
         "field_map": st.session_state["field_map"],
         "translated_fields": st.session_state.get("translated_fields", {}),
         "validation": st.session_state["validation"],
@@ -812,6 +823,6 @@ if "mt700" in st.session_state:
 
     c1, c2 = st.columns(2)
     with c1:
-        st.download_button("⬇️ DESCARGAR MT700 TXT", txt_data, file_name="MT700.txt", mime="text/plain")
+        st.download_button("⬇️ Descargar MT700 TXT", txt_data, file_name="MT700.txt", mime="text/plain")
     with c2:
-        st.download_button("⬇️ DESCARGAR VALIDACIÓN JSON", json_data, file_name="MT700_validation.json", mime="application/json")
+        st.download_button("⬇️ Descargar validación JSON", json_data, file_name="MT700_validation.json", mime="application/json")
