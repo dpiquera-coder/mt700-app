@@ -5,7 +5,7 @@ import json
 import re
 import subprocess
 import tempfile
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 
 try:
     import fitz  # PyMuPDF
@@ -252,7 +252,8 @@ def extract_pdf_first_page_text(data: bytes) -> str:
         if doc.page_count == 0:
             return ""
         page = doc[0]
-        return (page.get_text("text", sort=True) or "").strip()
+        text = page.get_text("text", sort=True) or ""
+        return text.strip()
     except Exception:
         return ""
 
@@ -264,37 +265,80 @@ def extract_pdf_first_page_blocks(data: bytes) -> str:
         if doc.page_count == 0:
             return ""
         page = doc[0]
-        blocks = page.get_text("blocks", sort=True)
+        blocks = page.get_text("blocks")
+        if not blocks:
+            return ""
         blocks = sorted(blocks, key=lambda b: (b[1], b[0]))
-        return "\n".join(str(block[4]).strip() for block in blocks if str(block[4]).strip())
+        lines = []
+        for block in blocks:
+            txt = str(block[4]).strip()
+            if txt:
+                lines.append(txt)
+        return "\n".join(lines).strip()
     except Exception:
         return ""
 
-def extract_text(uploaded_file, pdf_mode="blocks"):
+def extract_pdf_first_page_words(data: bytes) -> str:
+    if not fitz:
+        return ""
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+        if doc.page_count == 0:
+            return ""
+        page = doc[0]
+        words = page.get_text("words")
+        if not words:
+            return ""
+        words = sorted(words, key=lambda w: (w[1], w[0]))
+        return " ".join(str(w[4]).strip() for w in words if str(w[4]).strip()).strip()
+    except Exception:
+        return ""
+
+def extract_pdf_first_page_best(data: bytes) -> Tuple[str, str]:
+    text_mode = extract_pdf_first_page_text(data)
+    if len(text_mode.strip()) > 80:
+        return text_mode, "text"
+
+    blocks_mode = extract_pdf_first_page_blocks(data)
+    if len(blocks_mode.strip()) > 80:
+        return blocks_mode, "blocks"
+
+    words_mode = extract_pdf_first_page_words(data)
+    if len(words_mode.strip()) > 80:
+        return words_mode, "words"
+
+    return "", "none"
+
+def extract_text(uploaded_file, pdf_mode="auto") -> Tuple[str, str]:
     name = uploaded_file.name.lower()
     data = uploaded_file.getvalue()
 
     if name.endswith(".pdf"):
         if pdf_mode == "text":
-            return extract_pdf_first_page_text(data)
-        return extract_pdf_first_page_blocks(data)
+            return extract_pdf_first_page_text(data), "text"
+        if pdf_mode == "blocks":
+            return extract_pdf_first_page_blocks(data), "blocks"
+        if pdf_mode == "words":
+            return extract_pdf_first_page_words(data), "words"
+        best_text, best_mode = extract_pdf_first_page_best(data)
+        return best_text, best_mode
 
     if name.endswith(".docx"):
         if docx:
             try:
                 d = docx.Document(BytesIO(data))
-                return "\n".join(p.text for p in d.paragraphs)
+                return "\n".join(p.text for p in d.paragraphs), "docx"
             except Exception:
-                return ""
-        return ""
+                return "", "docx-error"
+        return "", "docx-missing-lib"
 
     if name.endswith(".doc"):
-        return extract_doc_legacy(data)
+        return extract_doc_legacy(data), "doc-antiword"
 
     try:
-        return data.decode("utf-8", errors="ignore")
+        return data.decode("utf-8", errors="ignore"), "text-file"
     except Exception:
-        return ""
+        return "", "unknown"
 
 def clean_text(text: str) -> str:
     text = text.replace("\xa0", " ")
@@ -481,7 +525,7 @@ def render_extraction_summary(data: Dict):
 
 pdf_mode = st.radio(
     "Modo lectura PDF (solo página 1)",
-    ["blocks", "text"],
+    ["auto", "text", "blocks", "words"],
     index=0,
     horizontal=True
 )
@@ -495,10 +539,13 @@ if st.button("🚀 Generar MT700"):
 
         for f in files:
             try:
-                txt = clean_text(extract_text(f, pdf_mode=pdf_mode))
+                raw_text, detected_mode = extract_text(f, pdf_mode=pdf_mode)
+                txt = clean_text(raw_text)
                 extracted_docs.append(f"### {f.name}\n{txt}")
                 debug_per_file.append({
                     "file": f.name,
+                    "requested_mode": pdf_mode if f.name.lower().endswith(".pdf") else "n/a",
+                    "detected_mode": detected_mode,
                     "chars": len(txt),
                     "preview": txt[:800]
                 })
@@ -569,18 +616,23 @@ if st.button("🚀 Generar MT700"):
         st.session_state["validation"] = validation
         st.session_state["score"] = calculate_score(mt700, validation)
         st.session_state["pdf_mode"] = pdf_mode
+        st.session_state["debug_per_file"] = debug_per_file
         st.success("✅ Generado")
 
 if "mt700" in st.session_state:
     render_extraction_summary(st.session_state["extraction"])
     st.divider()
 
+    with st.expander("🧪 Debug extracción guardado", expanded=False):
+        st.json(st.session_state.get("debug_per_file", []))
+        st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:4000], height=250)
+
     col1, col2 = st.columns([2, 1])
     with col1:
         edited_mt700 = st.text_area("📡 MT700", st.session_state["mt700"], height=520)
     with col2:
         st.metric("Confianza", f"{st.session_state['score']}%")
-        st.write("**Modo PDF usado:**", st.session_state.get("pdf_mode", "blocks"))
+        st.write("**Modo PDF solicitado:**", st.session_state.get("pdf_mode", "auto"))
         if st.session_state["score"] >= 90:
             st.success("✅ Alto nivel")
         elif st.session_state["score"] >= 70:
@@ -644,7 +696,8 @@ if "mt700" in st.session_state:
         "validation": st.session_state["validation"],
         "parsed_fields": parsed,
         "score": st.session_state["score"],
-        "pdf_mode": st.session_state.get("pdf_mode", "blocks")
+        "pdf_mode": st.session_state.get("pdf_mode", "auto"),
+        "debug_per_file": st.session_state.get("debug_per_file", [])
     }, ensure_ascii=False, indent=2).encode("utf-8")
 
     d1, d2 = st.columns(2)
