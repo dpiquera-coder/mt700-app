@@ -30,7 +30,7 @@ except Exception:
     pytesseract = None
 
 st.set_page_config(
-    page_title="MT700 Generator Anti-Hallucination v6.2",
+    page_title="MT700 Generator Anti-Hallucination v6.3",
     layout="wide",
     page_icon="🏦"
 )
@@ -108,7 +108,7 @@ textarea, .stTextArea textarea {{
 st.markdown("""
 <div class="mt700-hero">
   <p class="mt700-title">MT700 Generator</p>
-  <p class="mt700-subtitle">Anti-hallucination extraction with stronger party field recovery for 50 and 59</p>
+  <p class="mt700-subtitle">Anti-hallucination extraction with party recovery and MT700 fallback rules</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -161,6 +161,8 @@ VALID_40E_CODES = {
     "OTHR"
 }
 
+VALID_49_CODES = {"CONFIRM", "MAY ADD", "WITHOUT"}
+
 EXAMPLE_LIKE_VALUES = {
     "field_27": {"1/1"},
     "field_40A": VALID_40A_CODES,
@@ -168,8 +170,8 @@ EXAMPLE_LIKE_VALUES = {
     "field_39A": {"10/10"},
     "field_43P": {"ALLOWED", "NOT ALLOWED"},
     "field_43T": {"ALLOWED", "NOT ALLOWED"},
-    "field_48": {"21/AFTER SHIPMENT DATE"},
-    "field_49": {"WITHOUT", "CONFIRM", "MAY ADD"}
+    "field_48": {"21", "21/AFTER SHIPMENT DATE"},
+    "field_49": VALID_49_CODES
 }
 
 BANK_HINT_WORDS = {
@@ -203,7 +205,10 @@ SPANISH_TO_ENGLISH_REPLACEMENTS = {
     "A CARGO DEL BENEFICIARIO": "FOR BENEFICIARY'S ACCOUNT",
     "EMITIDO POR": "ISSUED BY",
     "A FAVOR DE": "IN FAVOUR OF",
-    "SI HUBIERA": "IF ANY"
+    "SI HUBIERA": "IF ANY",
+    "SIN AÑADIR SU CONFIRMACIÓN": "WITHOUT CONFIRMATION",
+    "SIN AADIR SU CONFIRMACIN": "WITHOUT CONFIRMATION",
+    "SIN AÑADIR SU CONFIRMACION": "WITHOUT CONFIRMATION",
 }
 
 SWIFT_MT700_CONTEXT = """
@@ -222,8 +227,10 @@ Authoritative MT700 structural context:
 - Field 32B format: currency code plus amount.
 - Field 40A valid code values are restricted.
 - Field 40E valid rules code values are restricted.
-- Field 48 is period for presentation.
-- Field 49 is confirmation instructions.
+- Field 48 is period for presentation in days.
+- The absence of field 48 means the presentation period is 21 days, where applicable.
+- Field 49 contains confirmation instructions and only valid codes are CONFIRM, MAY ADD, WITHOUT.
+- If field 31C is absent in MT700, the date of issue is the date on which the MT700 was sent.
 
 Anti-hallucination policy:
 - Extract only if supported by source text.
@@ -256,6 +263,7 @@ Strict rules:
 - For field_59, never return an advising bank or available-with bank unless source clearly identifies the bank itself as beneficiary.
 - For field_57A and field_41A, prefer bank/BIC content.
 - For 40A and 40E, output only valid SWIFT codes supported by evidence.
+- For 49, output only CONFIRM, MAY ADD, or WITHOUT if supported.
 - Never create values from examples or defaults.
 """
 
@@ -280,6 +288,11 @@ MT700 target guide:
 - Do not create 41B/41C/41D.
 - Do not use example values unless supported by source evidence.
 """
+
+ORIGIN_EXTRACTED = "EXTRACTED"
+ORIGIN_INFERRED = "INFERRED_FROM_CONTEXT"
+ORIGIN_SYSTEM_DEFAULT = "SYSTEM_DEFAULT"
+ORIGIN_OPERATIONAL_DEFAULT = "OPERATIONAL_DEFAULT"
 
 def tesseract_available() -> bool:
     return shutil.which("tesseract") is not None and pytesseract is not None and Image is not None
@@ -383,7 +396,8 @@ def parse_extraction_object(data: Dict) -> Dict:
             "value": clean_value(value) if value is not None else None,
             "evidence": clean_text(safe_str(evidence)) if evidence is not None else None,
             "found": found,
-            "confidence": max(0, min(confidence, 100))
+            "confidence": max(0, min(confidence, 100)),
+            "origin": ORIGIN_EXTRACTED
         }
     return out
 
@@ -527,6 +541,9 @@ def semantic_field_check(field_key: str, value: str) -> Tuple[bool, str]:
             return False, "48 cannot contain percentage"
         if not re.fullmatch(r"\d{1,3}(/.+)?", v):
             return False, "48 invalid format"
+    elif field_key == "field_49":
+        if v not in VALID_49_CODES:
+            return False, "49 invalid code"
     elif field_key == "field_71D":
         if re.fullmatch(r"[0-9,\.]+", v):
             return False, "71D cannot be numeric only"
@@ -542,22 +559,118 @@ def semantic_field_check(field_key: str, value: str) -> Tuple[bool, str]:
 def enrich_party_value_from_evidence(field_key: str, value: str, evidence: str) -> str:
     if field_key not in PARTY_FIELDS:
         return value
-
     rebuilt = extract_party_from_evidence(evidence)
     if rebuilt:
         return rebuilt
     return value
 
-def verify_extraction(extracted: Dict) -> Tuple[Dict, List[str]]:
+def infer_mt700_defaults(source_text: str, verified_map: Dict) -> Dict[str, Dict]:
+    t = to_upper(source_text)
+    inferred = {}
+
+    has_lc_context = any(x in t for x in [
+        "LETTER OF CREDIT", "DOCUMENTARY CREDIT", "CREDITO DOCUMENTARIO", "CRÉDITO DOCUMENTARIO", "MT700"
+    ])
+
+    if not verified_map["field_40A"]["accepted"] and has_lc_context:
+        inferred["field_40A"] = {
+            "value": "IRREVOCABLE",
+            "reason": "Inferred from LC context",
+            "origin": ORIGIN_INFERRED
+        }
+
+    if not verified_map["field_40E"]["accepted"] and has_lc_context:
+        if "EUCP" in t:
+            inferred["field_40E"] = {
+                "value": "EUCP LATEST VERSION",
+                "reason": "Inferred from eUCP context",
+                "origin": ORIGIN_INFERRED
+            }
+        elif "UCPURR" in t or ("URR" in t and "UCP" in t):
+            inferred["field_40E"] = {
+                "value": "UCPURR LATEST VERSION",
+                "reason": "Inferred from UCP+URR context",
+                "origin": ORIGIN_INFERRED
+            }
+        elif "ISP98" in t or "STANDBY" in t:
+            inferred["field_40E"] = {
+                "value": "ISP LATEST VERSION",
+                "reason": "Inferred from standby/ISP context",
+                "origin": ORIGIN_INFERRED
+            }
+        else:
+            inferred["field_40E"] = {
+                "value": "UCP LATEST VERSION",
+                "reason": "Inferred from standard LC context",
+                "origin": ORIGIN_INFERRED
+            }
+
+    if not verified_map["field_49"]["accepted"]:
+        if any(x in t for x in [
+            "WITHOUT CONFIRMATION",
+            "WITHOUT ADDING CONFIRMATION",
+            "SIN AÑADIR SU CONFIRMACIÓN",
+            "SIN AÑADIR SU CONFIRMACION",
+            "SIN AADIR SU CONFIRMACIN"
+        ]):
+            inferred["field_49"] = {
+                "value": "WITHOUT",
+                "reason": "Inferred from no-confirmation wording",
+                "origin": ORIGIN_INFERRED
+            }
+
+    if not verified_map["field_48"]["accepted"] and has_lc_context:
+        inferred["field_48"] = {
+            "value": "21",
+            "reason": "Default presentation period when absent",
+            "origin": ORIGIN_SYSTEM_DEFAULT
+        }
+
+    if not verified_map["field_31C"]["accepted"]:
+        inferred["field_31C"] = {
+            "value": datetime.now().strftime("%y%m%d"),
+            "reason": "System fallback issue date when absent",
+            "origin": ORIGIN_SYSTEM_DEFAULT
+        }
+
+    return inferred
+
+def apply_inferred_defaults(verified_map: Dict, inferred: Dict) -> Tuple[Dict, List[str]]:
+    audit = []
+    for key, meta in inferred.items():
+        current = verified_map.get(key, {})
+        if current.get("accepted"):
+            continue
+
+        value = meta["value"]
+        ok, msg = semantic_field_check(key, value)
+        if not ok:
+            audit.append(f"{key}: inferred/default value rejected: {msg}")
+            continue
+
+        verified_map[key] = {
+            "value": value,
+            "evidence": "",
+            "found": True,
+            "confidence": 100 if meta["origin"] == ORIGIN_SYSTEM_DEFAULT else 85,
+            "accepted": True,
+            "reason": meta["reason"],
+            "origin": meta["origin"]
+        }
+        audit.append(f"{key}: accepted by {meta['origin']} -> {value}")
+    return verified_map, audit
+
+def verify_extraction(extracted: Dict, source_text: str) -> Tuple[Dict, List[str]]:
     verified = {}
     audit = []
 
     for key in FIELD_KEYS:
-        item = extracted.get(key, {"value": None, "evidence": None, "found": False, "confidence": 0})
+        item = extracted.get(key, {"value": None, "evidence": None, "found": False, "confidence": 0, "origin": ORIGIN_EXTRACTED})
         value = item.get("value")
         evidence = item.get("evidence")
         found = bool(item.get("found"))
         confidence = int(item.get("confidence", 0) or 0)
+        origin = item.get("origin", ORIGIN_EXTRACTED)
 
         accepted = False
         reason = ""
@@ -588,7 +701,8 @@ def verify_extraction(extracted: Dict) -> Tuple[Dict, List[str]]:
                 "found": True,
                 "confidence": 100,
                 "accepted": True,
-                "reason": "Accepted by operational default"
+                "reason": "Accepted by operational default",
+                "origin": ORIGIN_OPERATIONAL_DEFAULT
             }
             audit.append(f"{key}: accepted by operational default 1/1")
             continue
@@ -599,9 +713,14 @@ def verify_extraction(extracted: Dict) -> Tuple[Dict, List[str]]:
             "found": accepted,
             "confidence": confidence if accepted else 0,
             "accepted": accepted,
-            "reason": "Accepted" if accepted else reason
+            "reason": "Accepted" if accepted else reason,
+            "origin": origin if accepted else ""
         }
         audit.append(f"{key}: {'ACCEPTED' if accepted else reason}")
+
+    inferred = infer_mt700_defaults(source_text, verified)
+    verified, infer_audit = apply_inferred_defaults(verified, inferred)
+    audit.extend(infer_audit)
 
     return verified, audit
 
@@ -668,10 +787,16 @@ def validate_mt700(mt700: str, verified_map: Dict) -> Dict:
     for mandatory_tag in MANDATORY_IN_SCOPE:
         key = TAG_TO_FIELD[mandatory_tag]
         if not verified_map.get(key, {}).get("accepted", False):
-            warnings.append(f"Mandatory MT700 field not supported by source and therefore omitted :{mandatory_tag}:")
+            warnings.append(f"Mandatory MT700 field not supported by source/default logic and therefore omitted :{mandatory_tag}:")
 
     if "42C" in fields:
         warnings.append("42C present: in full SWIFT logic related 42a should also exist")
+
+    if verified_map.get("field_48", {}).get("origin") == ORIGIN_SYSTEM_DEFAULT:
+        warnings.append("48 inserted by default rule: absence implies 21 days where applicable")
+
+    if verified_map.get("field_31C", {}).get("origin") == ORIGIN_SYSTEM_DEFAULT:
+        warnings.append("31C inserted by system fallback issue date")
 
     score = max(0, 100 - len(issues) * 10 - len(warnings) * 3)
     return {
@@ -689,6 +814,7 @@ def extraction_table_rows(verified_map: Dict) -> List[Dict]:
             "field": key,
             "tag": FIELD_TO_TAG[key],
             "accepted": item.get("accepted", False),
+            "origin": item.get("origin", ""),
             "confidence": item.get("confidence", 0),
             "value": item.get("value", ""),
             "evidence": item.get("evidence", ""),
@@ -699,7 +825,10 @@ def extraction_table_rows(verified_map: Dict) -> List[Dict]:
 if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
 
-st.markdown('<p class="small-note">Esta versión recupera mejor nombre + dirección en 50/59 y evita confundir beneficiario con banco.</p>', unsafe_allow_html=True)
+st.markdown(
+    '<p class="small-note">Esta versión añade fallbacks auditados para 40A, 40E, 49, 48 y 31C, y mantiene la recuperación mejorada de 50/59.</p>',
+    unsafe_allow_html=True
+)
 
 if st.button("🚀 Generar MT700"):
     if not files:
@@ -760,7 +889,7 @@ if st.button("🚀 Generar MT700"):
             with st.expander("🧩 Extracción cruda con evidencia", expanded=False):
                 st.json(extracted)
 
-            verified_map, audit = verify_extraction(extracted)
+            verified_map, audit = verify_extraction(extracted, source_text)
 
             with st.expander("🛡️ Auditoría anti-alucinación", expanded=False):
                 st.json(extraction_table_rows(verified_map))
@@ -781,7 +910,7 @@ if st.button("🚀 Generar MT700"):
             st.session_state["mt700"] = mt700
             st.session_state["validation"] = validation
 
-            st.success("✅ Generado con control anti-alucinación y recuperación mejorada de parties")
+            st.success("✅ Generado con control anti-alucinación, recovery de parties y fallback rules auditadas")
 
         except Exception as e:
             st.error(f"Error durante la ejecución: {e}")
@@ -814,6 +943,6 @@ if "mt700" in st.session_state:
 
     c1, c2 = st.columns(2)
     with c1:
-        st.download_button("⬇️ Descargar MT700 TXT", txt_data, file_name="MT700_ANTI_HALLUCINATION_V62.txt", mime="text/plain")
+        st.download_button("⬇️ Descargar MT700 TXT", txt_data, file_name="MT700_ANTI_HALLUCINATION_V63.txt", mime="text/plain")
     with c2:
-        st.download_button("⬇️ Descargar auditoría JSON", json_data, file_name="MT700_AUDIT_V62.json", mime="application/json")
+        st.download_button("⬇️ Descargar auditoría JSON", json_data, file_name="MT700_AUDIT_V63.json", mime="application/json")
