@@ -16,7 +16,7 @@ except Exception:
 try:
     import docx
 except Exception:
-    docx = None
+        docx = None
 
 try:
     from PIL import Image
@@ -29,7 +29,7 @@ except Exception:
     pytesseract = None
 
 st.set_page_config(
-    page_title="MT700 Generator v5.4",
+    page_title="MT700 Generator v5.4.1",
     layout="wide",
     page_icon="🏦"
 )
@@ -45,125 +45,37 @@ st.markdown(f"""
     --santander-dark-red: {SANTANDER_DARK_RED};
     --santander-border: {SANTANDER_BORDER};
 }}
-
-.block-container {{
-    padding-top: 1.5rem;
-    padding-bottom: 2rem;
-}}
-
-.main {{
-    background: linear-gradient(180deg, #fff 0%, #fff7f7 100%);
-}}
-
+.block-container {{ padding-top: 1.5rem; padding-bottom: 2rem; }}
+.main {{ background: linear-gradient(180deg, #fff 0%, #fff7f7 100%); }}
 [data-testid="stMetric"] {{
-    background: white;
-    border: 1px solid var(--santander-border);
-    border-radius: 14px;
-    padding: 14px 18px;
-    box-shadow: 0 4px 18px rgba(236, 0, 0, 0.06);
+    background: white; border: 1px solid var(--santander-border); border-radius: 14px;
+    padding: 14px 18px; box-shadow: 0 4px 18px rgba(236, 0, 0, 0.06);
 }}
-
-.stButton > button,
-.stDownloadButton > button {{
-    background: var(--santander-red);
-    color: white;
-    border: none;
-    border-radius: 10px;
-    padding: 0.6rem 1rem;
-    font-weight: 600;
+.stButton > button, .stDownloadButton > button {{
+    background: var(--santander-red); color: white; border: none; border-radius: 10px;
+    padding: 0.6rem 1rem; font-weight: 600;
 }}
-
-.stButton > button:hover,
-.stDownloadButton > button:hover {{
-    background: var(--santander-dark-red);
-    color: white;
+.stButton > button:hover, .stDownloadButton > button:hover {{
+    background: var(--santander-dark-red); color: white;
 }}
-
 div[data-testid="stExpander"] {{
-    border: 1px solid #f0d6d6;
-    border-radius: 12px;
-    background: #fffdfd;
+    border: 1px solid #f0d6d6; border-radius: 12px; background: #fffdfd;
     box-shadow: 0 2px 10px rgba(236, 0, 0, 0.04);
 }}
-
-div[data-testid="stExpander"] details summary {{
-    font-weight: 600;
-    color: #5c1111;
-}}
-
-textarea, .stTextArea textarea {{
-    border-radius: 10px !important;
-}}
-
 .mt700-hero {{
     background: linear-gradient(135deg, {SANTANDER_RED} 0%, #ff3b30 100%);
-    color: white;
-    border-radius: 18px;
-    padding: 22px 24px;
-    margin-bottom: 1rem;
+    color: white; border-radius: 18px; padding: 22px 24px; margin-bottom: 1rem;
     box-shadow: 0 12px 30px rgba(236, 0, 0, 0.18);
 }}
-
-.mt700-hero-row {{
-    display: flex;
-    align-items: center;
-    gap: 16px;
-}}
-
-.mt700-logo {{
-    width: 52px;
-    height: 52px;
-    border-radius: 14px;
-    background: rgba(255,255,255,0.14);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-shrink: 0;
-}}
-
-.mt700-logo svg {{
-    width: 34px;
-    height: 34px;
-    fill: white;
-}}
-
-.mt700-title {{
-    font-size: 1.7rem;
-    font-weight: 700;
-    margin: 0;
-    line-height: 1.1;
-}}
-
-.mt700-subtitle {{
-    margin: 0.25rem 0 0 0;
-    opacity: 0.92;
-    font-size: 0.98rem;
-}}
-
-.section-title {{
-    color: {SANTANDER_DARK_RED};
-    font-weight: 700;
-    margin-top: 0.5rem;
-    margin-bottom: 0.35rem;
-}}
+.mt700-title {{ font-size: 1.7rem; font-weight: 700; margin: 0; }}
+.mt700-subtitle {{ margin: 0.25rem 0 0 0; opacity: 0.92; font-size: 0.98rem; }}
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown("""
 <div class="mt700-hero">
-  <div class="mt700-hero-row">
-    <div class="mt700-logo" aria-hidden="true">
-      <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
-        <path d="M34.7 8.5c3.5 5.7 4.7 11.2 3.4 16.1-1 3.8-3.6 6.9-7.1 9.4 1.3-4.7-.2-8.4-3.2-12.4-2.1-2.8-3.6-6-3.1-9.9.6-4.4 3.8-8 10-3.2z"/>
-        <path d="M22.2 37.4c2.8-3.4 6.4-5.8 11-7.1-1.6 2.7-1.2 5.8.2 8.4 1.8 3.3 4.7 6.1 5.8 10.1 1.4 5.1-1.2 8.9-7.5 8.9-8.7 0-14.1-7.5-9.5-20.3z"/>
-        <ellipse cx="31.5" cy="54.5" rx="14.5" ry="4.5"/>
-      </svg>
-    </div>
-    <div>
-      <p class="mt700-title">MT700 Generator</p>
-      <p class="mt700-subtitle">Trade Finance assistant with strict SWIFT mapping, validation and English narrative repair</p>
-    </div>
-  </div>
+  <p class="mt700-title">MT700 Generator</p>
+  <p class="mt700-subtitle">Trade Finance assistant with strict SWIFT mapping, validation and English narrative repair</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -218,106 +130,30 @@ SPANISH_TO_ENGLISH_REPLACEMENTS = {
     "ENVIAR DOCUMENTOS": "SEND DOCUMENTS",
     "GASTOS BANCARIOS": "BANKING CHARGES",
     "FUERA DE ESPAÑA": "OUTSIDE SPAIN",
-    "A CARGO DEL BENEFICIARIO": "FOR BENEFICIARY'S ACCOUNT",
-    "EMITIDO POR": "ISSUED BY",
-    "A FAVOR DE": "IN FAVOUR OF",
-    "SI HUBIERA": "IF ANY",
-    "LOGISTICA DE PRUEBA": "LOGISTICA DE PRUEBA",
-    "LOS GASTOS BANCARIOS": "ALL BANKING CHARGES",
-    "SON POR CUENTA DEL BENEFICIARIO": "ARE FOR BENEFICIARY'S ACCOUNT"
+    "A CARGO DEL BENEFICIARIO": "FOR BENEFICIARY'S ACCOUNT"
 }
 
 EXPECTED_GUIDE = """
 Expected MT700 style guide:
-
-- :27: sequence, e.g. 1/1
-- :20: documentary credit number / LC reference
-- :40A: form of documentary credit, e.g. IRREVOCABLE
-- :40E: applicable rules, e.g. UCP LATEST VERSION
-- :31C: issue date in YYMMDD
-- :31D: expiry date in YYMMDD immediately followed by expiry place, e.g. 260621HONG KONG
-- :50: applicant name and address
-- :59: beneficiary name and address
-- :32B: currency + amount only, e.g. USD33998,64
-- :39A: tolerance only, e.g. 10/10
-- :41A: available with bank BIC + method, e.g. BSCHHKHHXXXX / BY PAYMENT
-- :42C: drafts at...
-- :43P: ALLOWED / NOT ALLOWED
-- :43T: ALLOWED / NOT ALLOWED
-- :44E: port of loading / place of receipt
-- :44F: port of discharge / final destination
-- :44C: latest shipment date in YYMMDD
-- :45A: goods description in English
-- :46A: documents required in English
-- :47A: additional conditions in English
-- :48: presentation period, e.g. 21/AFTER SHIPMENT DATE
-- :49: confirmation instructions, e.g. WITHOUT
-- :57A: advising / routed bank BIC
-- :71D: charges clause in English
-- :78: instructions to paying / negotiating bank in English
-- :72Z: sender to receiver information in English
-
-Hard prohibitions:
-- Do NOT output :41B:, :41C:, :41D:
-- Do NOT place names/addresses in :32B:
-- Do NOT place amounts in :50:, :59:, :71D:, :72Z:, :48:, :49:
-- Do NOT place beneficiary name in :40A:
-- Do NOT place addresses in :40E:
 - Final output must be uppercase.
+- Use only allowed MT700 tags.
+- Narrative fields must be in English.
 """
 
 STRUCTURED_EXTRACTION_PROMPT = """
 You are a senior Trade Finance data extraction engine.
-
 Extract factual values from the provided documents into the target MT700 field map.
 Return JSON only.
-
-Rules:
-- Use null if not found.
-- Preserve factual values, references, bank names, BICs, addresses, dates, ports, amounts.
-- Convert narrative wording to concise English where needed.
-- Do not guess a value if unsupported.
-- Do not invent SWIFT tags outside the requested schema.
-- Use the expected MT700 style guide supplied by the user.
-
-Field meaning constraints:
-- field_20 = LC reference / documentary credit number
-- field_40A = IRREVOCABLE / REVOCABLE style form only
-- field_40E = applicable rules only
-- field_32B = currency+amount only
-- field_39A = tolerance only
-- field_48 = presentation period only
-- field_49 = confirmation instruction only
-- field_71D = charges clause only
+Use null if not found.
+Do not invent values.
 """
 
 GENERATION_PROMPT = """
 You are a senior Trade Finance officer specialized in SWIFT MT700.
-
 Generate one final MT700 in SWIFT format from the structured field map.
 Return ONLY the MT700. No commentary. No markdown.
-
-Use the style guide exactly.
-Respect the semantic type of each field.
-Do not output any disallowed tags.
-Narrative fields must be in English.
-Final output must be fully uppercase.
-If some field is unclear, preserve the provided seed structure and do not omit valid populated tags.
+Final output must be uppercase.
 """
-
-SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "mt700_field_map",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {k: {"type": ["string", "null"]} for k in FIELD_KEYS},
-            "required": FIELD_KEYS,
-            "additionalProperties": False
-        }
-    }
-}
 
 def tesseract_available() -> bool:
     return shutil.which("tesseract") is not None and pytesseract is not None and Image is not None
@@ -342,14 +178,7 @@ def safe_str_value(value) -> str:
     if isinstance(value, (int, float, bool)):
         return str(value).strip()
     if isinstance(value, list):
-        parts = []
-        for item in value:
-            if item is None:
-                continue
-            item = safe_str_value(item)
-            if item:
-                parts.append(item)
-        return "\n".join(parts).strip()
+        return "\n".join(safe_str_value(x) for x in value if safe_str_value(x)).strip()
     if isinstance(value, dict):
         try:
             return json.dumps(value, ensure_ascii=False).strip()
@@ -368,38 +197,25 @@ def clean_spanish_artifacts(text: str) -> str:
     result = re.sub(r" *\n *", "\n", result)
     return result.strip()
 
-def call_llm_json(system_prompt: str, user_text: str, schema: Dict, max_tokens: int = 1600) -> Dict:
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_text}
-            ],
-            response_format=schema,
-            max_tokens=max_tokens,
-            temperature=0.05
-        )
-        return safe_json_load(response.choices[0].message.content or "{}")
-    except Exception:
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {"role": "system", "content": system_prompt + "\nReturn only valid JSON."},
-                {"role": "user", "content": user_text}
-            ],
-            response_format={"type": "json_object"},
-            max_tokens=max_tokens,
-            temperature=0.05
-        )
-        return safe_json_load(response.choices[0].message.content or "{}")
-
-def call_llm_text(system_prompt: str, user_text: str, max_tokens: int = 2200) -> str:
+def call_llm_json(system_prompt: str, user_text: str, schema: Dict, max_tokens: int = 1200) -> Dict:
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_text}
+            {"role": "user", "content": user_text[:18000]}
+        ],
+        response_format=schema,
+        max_tokens=max_tokens,
+        temperature=0.05
+    )
+    return safe_json_load(response.choices[0].message.content or "{}")
+
+def call_llm_text(system_prompt: str, user_text: str, max_tokens: int = 1800) -> str:
+    response = client.chat.completions.create(
+        model="llama-3.1-8b-instant",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_text[:18000]}
         ],
         max_tokens=max_tokens,
         temperature=0.05
@@ -411,7 +227,7 @@ def clean_text(text: str) -> str:
     text = "".join(c for c in text if c.isprintable() or c in "\n\t")
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    return text[:50000].strip()
+    return text[:30000].strip()
 
 def extract_doc_legacy(data: bytes) -> str:
     try:
@@ -425,13 +241,14 @@ def extract_doc_legacy(data: bytes) -> str:
         pass
     return ""
 
-def extract_pdf_ocr_all_pages(data: bytes) -> str:
+def extract_pdf_ocr_all_pages(data: bytes, max_pages: int = 3) -> str:
     if not fitz or not tesseract_available():
         return ""
     try:
         doc = fitz.open(stream=data, filetype="pdf")
         out = []
-        for i in range(doc.page_count):
+        pages = min(doc.page_count, max_pages)
+        for i in range(pages):
             page = doc[i]
             pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
             img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
@@ -441,71 +258,16 @@ def extract_pdf_ocr_all_pages(data: bytes) -> str:
     except Exception:
         return ""
 
-def extract_field_78_from_source(source_text: str) -> str:
-    text = force_uppercase(source_text)
-    patterns = [
-        r"\b78\b(.*?)(?=\b57A\b)",
-        r":78:(.*?)(?=:57A:)",
-        r"\b78(.*?)(?=\b72Z\b)"
-    ]
-    for pattern in patterns:
-        m = re.search(pattern, text, re.S)
-        if m:
-            candidate = clean_spanish_artifacts(m.group(1))
-            candidate = re.sub(r"^[:\s.-]+", "", candidate).strip()
-            if len(candidate) > 20:
-                return candidate
-    return ""
-
-def normalize_field_map(data: Dict, source_text: str = "") -> Dict:
+def normalize_field_map(data: Dict) -> Dict:
     if not isinstance(data, dict):
         return {k: "" for k in FIELD_KEYS}
-
-    normalized = {}
-    for key in FIELD_KEYS:
-        normalized[key] = clean_spanish_artifacts(safe_str_value(data.get(key)))
-
+    normalized = {k: clean_spanish_artifacts(safe_str_value(data.get(k))) for k in FIELD_KEYS}
     if not normalized.get("field_27"):
         normalized["field_27"] = "1/1"
-
-    if normalized.get("field_40A"):
-        val = normalized["field_40A"].upper()
-        if "IRREV" in val:
-            normalized["field_40A"] = "IRREVOCABLE"
-        elif "REVOC" in val:
-            normalized["field_40A"] = "REVOCABLE"
-
-    if normalized.get("field_40E") and "UCP" in normalized["field_40E"].upper():
-        normalized["field_40E"] = "UCP LATEST VERSION"
-
-    if normalized.get("field_32B"):
-        v = normalized["field_32B"].replace(" ", "")
-        v = re.sub(r"^(USD|EUR|GBP)\s*([0-9].*)$", r"\1\2", v)
-        normalized["field_32B"] = v
-
-    if normalized.get("field_43P"):
-        v = normalized["field_43P"].upper()
-        if "ALLOW" in v:
-            normalized["field_43P"] = "ALLOWED"
-        elif "NOT" in v:
-            normalized["field_43P"] = "NOT ALLOWED"
-
-    if normalized.get("field_43T"):
-        v = normalized["field_43T"].upper()
-        if "ALLOW" in v:
-            normalized["field_43T"] = "ALLOWED"
-        elif "NOT" in v:
-            normalized["field_43T"] = "NOT ALLOWED"
-
-    if not normalized.get("field_78") and source_text:
-        normalized["field_78"] = extract_field_78_from_source(source_text)
-
     return normalized
 
 def build_mt700_from_map(m: Dict) -> str:
-    lines = [
-        "{1:F01BSCHESMMXXXX0123000001}{2:I700BSCHHKHHXXXXN2020}{4:"
-    ]
+    lines = ["{1:F01BSCHESMMXXXX0123000001}{2:I700BSCHHKHHXXXXN2020}{4:"]
     mapping = {
         "27": "field_27", "20": "field_20", "40A": "field_40A", "40E": "field_40E",
         "31C": "field_31C", "31D": "field_31D", "50": "field_50", "59": "field_59",
@@ -515,13 +277,10 @@ def build_mt700_from_map(m: Dict) -> str:
         "48": "field_48", "49": "field_49", "57A": "field_57A", "71D": "field_71D",
         "78": "field_78", "72Z": "field_72Z"
     }
-
     for tag in ALLOWED_TAGS:
-        key = mapping[tag]
-        value = clean_spanish_artifacts(safe_str_value(m.get(key)))
+        value = safe_str_value(m.get(mapping[tag]))
         if value:
             lines.append(f":{tag}:{value}")
-
     lines.append("-}")
     return "\n".join(lines).upper()
 
@@ -536,269 +295,137 @@ def contains_spanish_narrative(text: str) -> bool:
 def validate_mt700(mt700: str) -> Dict:
     fields = parse_mt700_fields(mt700)
     issues, warnings = [], []
-
     for tag in ALLOWED_TAGS:
         if tag not in fields or not fields[tag].strip():
             issues.append(f"Missing or empty field :{tag}:")
-
-    forbidden = re.findall(r"^:([0-9]{2}[A-Z]?):", mt700 or "", re.M)
-    for tag in forbidden:
-        if tag not in ALLOWED_TAGS:
-            issues.append(f"Forbidden tag detected :{tag}:")
-
-    if "32B" in fields and not re.match(r"^[A-Z]{3}[0-9,\.]+$", fields["32B"].replace(" ", "")):
-        issues.append(":32B: must contain currency and amount only")
-
-    if "40A" in fields and fields["40A"].upper() not in ["IRREVOCABLE", "REVOCABLE"]:
-        issues.append(":40A: must be form of documentary credit only")
-
-    if "40E" in fields and len(fields["40E"]) > 80 and "," in fields["40E"]:
-        issues.append(":40E: appears to contain address-like content")
-
-    if "48" in fields and "%" in fields["48"]:
-        issues.append(":48: cannot contain percentage value")
-
-    if "49" in fields and "%" in fields["49"]:
-        issues.append(":49: cannot contain percentage value")
-
-    if "71D" in fields and re.fullmatch(r"[0-9,\.]+", fields["71D"].strip()):
-        issues.append(":71D: cannot be numeric only")
-
-    if "50" in fields and re.fullmatch(r"[0-9,\.]+", fields["50"].strip()):
-        issues.append(":50: cannot be numeric only")
-
-    if "59" in fields and re.fullmatch(r"[0-9,\.]+", fields["59"].strip()):
-        issues.append(":59: cannot be numeric only")
-
     for tag in NARRATIVE_TAGS:
         if tag in fields and contains_spanish_narrative(fields[tag]):
             warnings.append(f":{tag}: contains non-English wording")
-
     score = 100 - min(70, len(issues) * 8) - min(20, len(warnings) * 3)
-    score = max(score, 0)
-
-    defective_fields = []
-    for x in issues + warnings:
-        defective_fields.extend(re.findall(r":([0-9]{2}[A-Z]?):", x))
-
     return {
         "is_valid": len(issues) == 0,
-        "score": score,
+        "score": max(score, 0),
         "issues": issues,
         "warnings": warnings,
-        "defective_fields": sorted(set(defective_fields))
+        "defective_fields": sorted(set(re.findall(r":([0-9]{2}[A-Z]?):", " ".join(issues + warnings))))
     }
-
-def translate_narrative_fields(mt700: str, defective_fields: List[str], source_text: str) -> Dict[str, str]:
-    parsed = parse_mt700_fields(mt700)
-    payload = {}
-    for tag in defective_fields:
-        if tag in parsed and parsed[tag].strip():
-            payload[tag] = parsed[tag]
-
-    if not payload:
-        return {}
-
-    schema = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "mt700_narrative_translation_dynamic",
-            "strict": True,
-            "schema": {
-                "type": "object",
-                "properties": {tag: {"type": "string"} for tag in payload.keys()},
-                "required": list(payload.keys()),
-                "additionalProperties": False
-            }
-        }
-    }
-
-    user_text = (
-        "SOURCE DOCUMENTS:\n" + source_text[:20000] +
-        "\n\nCURRENT NARRATIVE FIELD VALUES:\n" + json.dumps(payload, ensure_ascii=False, indent=2)
-    )
-
-    translated = call_llm_json(
-        """
-You are a senior Trade Finance banking translator.
-
-Translate ONLY the provided MT700 narrative field values into professional banking English.
-Return JSON only.
-
-Rules:
-- Preserve factual content.
-- Translate wording only.
-- Do not add facts.
-- Do not omit facts.
-- Return values in uppercase.
-""",
-        user_text,
-        schema,
-        max_tokens=1200
-    )
-    return {k: clean_spanish_artifacts(safe_str_value(v)) for k, v in translated.items() if k in payload}
-
-def replace_mt700_fields(mt700: str, replacements: Dict[str, str]) -> str:
-    if not replacements:
-        return mt700
-
-    pattern = re.compile(r"(?ms)^:([0-9]{2}[A-Z]?):(.*?)(?=^:[0-9]{2}[A-Z]?:|^-}\s*$|\Z)")
-
-    def repl(match):
-        tag = match.group(1)
-        old_value = match.group(2)
-        if tag in replacements and replacements[tag].strip():
-            new_value = clean_spanish_artifacts(replacements[tag])
-            return f":{tag}:{new_value}\n"
-        return f":{tag}:{old_value}"
-
-    result = pattern.sub(repl, mt700)
-    result = re.sub(r"\n-}$", "\n-}", result)
-    return result.upper()
 
 def final_cleanup_mt700(mt700: str, seed_mt700: str = "") -> str:
     parsed = parse_mt700_fields(mt700)
     if len(parsed) < 5 and seed_mt700:
-        parsed = parse_mt700_fields(seed_mt700)
-
-    rebuilt = []
-    header_match = re.match(r"(?s)^(.*?\{4:\n)", mt700)
-    header = header_match.group(1) if header_match else "{1:F01BSCHESMMXXXX0123000001}{2:I700BSCHHKHHXXXXN2020}{4:\n"
-    rebuilt.append(header.rstrip("\n"))
-
+        return seed_mt700.upper()
+    rebuilt = ["{1:F01BSCHESMMXXXX0123000001}{2:I700BSCHHKHHXXXXN2020}{4:"]
     for tag in ALLOWED_TAGS:
         if tag in parsed and parsed[tag].strip():
-            value = clean_spanish_artifacts(parsed[tag])
-            rebuilt.append(f":{tag}:{value}")
-
+            rebuilt.append(f":{tag}:{clean_spanish_artifacts(parsed[tag])}")
     rebuilt.append("-}")
     return "\n".join(rebuilt).upper()
 
-if not tesseract_available():
-    st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
-
-st.markdown('<p class="section-title">Input documents</p>', unsafe_allow_html=True)
+SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "mt700_field_map",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {k: {"type": ["string", "null"]} for k in FIELD_KEYS},
+            "required": FIELD_KEYS,
+            "additionalProperties": False
+        }
+    }
+}
 
 if st.button("🚀 Generar MT700"):
     if not files:
         st.warning("Sube documentos")
     else:
-        full_parts = []
-        debug = []
-
-        for f in files:
-            name = f.name.lower()
-            data = f.getvalue()
-            txt = ""
-
-            if name.endswith(".pdf"):
-                txt = extract_pdf_ocr_all_pages(data)
-                mode = "ocr-all-pages"
-            elif name.endswith(".docx"):
-                try:
-                    d = docx.Document(BytesIO(data))
-                    txt = "\n".join(p.text for p in d.paragraphs)
-                    mode = "docx"
-                except Exception:
+        try:
+            with st.spinner("Extrayendo texto de documentos..."):
+                full_parts = []
+                debug = []
+                for f in files:
+                    name = f.name.lower()
+                    data = f.getvalue()
                     txt = ""
-                    mode = "docx-error"
-            elif name.endswith(".doc"):
-                txt = extract_doc_legacy(data)
-                mode = "doc"
-            else:
-                try:
-                    txt = data.decode("utf-8", errors="ignore")
-                    mode = "text"
-                except Exception:
-                    txt = ""
-                    mode = "unknown"
+                    if name.endswith(".pdf"):
+                        txt = extract_pdf_ocr_all_pages(data, max_pages=3)
+                        mode = "ocr-pdf"
+                    elif name.endswith(".docx"):
+                        try:
+                            d = docx.Document(BytesIO(data))
+                            txt = "\n".join(p.text for p in d.paragraphs)
+                            mode = "docx"
+                        except Exception:
+                            txt = ""
+                            mode = "docx-error"
+                    elif name.endswith(".doc"):
+                        txt = extract_doc_legacy(data)
+                        mode = "doc"
+                    else:
+                        try:
+                            txt = data.decode("utf-8", errors="ignore")
+                            mode = "text"
+                        except Exception:
+                            txt = ""
+                            mode = "unknown"
 
-            txt = clean_text(txt)
-            full_parts.append(f"### {f.name}\n{txt}")
-            debug.append({
-                "file": f.name,
-                "mode": mode,
-                "chars": len(txt),
-                "preview": txt[:800]
-            })
+                    txt = clean_text(txt)
+                    full_parts.append(f"### {f.name}\n{txt}")
+                    debug.append({"file": f.name, "mode": mode, "chars": len(txt), "preview": txt[:800]})
 
-        source_text = "\n\n".join(full_parts)
+                source_text = "\n\n".join(full_parts)
 
-        with st.expander("🧪 Debug extracción", expanded=False):
-            st.json(debug)
-            st.text_area("Texto fuente", source_text[:5000], height=300)
+            with st.expander("🧪 Debug extracción", expanded=False):
+                st.json(debug)
+                st.text_area("Texto fuente", source_text[:5000], height=300)
 
-        user_payload = EXPECTED_GUIDE + "\n\nSOURCE DOCUMENTS:\n" + source_text[:30000]
+            with st.spinner("Extrayendo field map..."):
+                user_payload = EXPECTED_GUIDE + "\n\nSOURCE DOCUMENTS:\n" + source_text[:18000]
+                field_map_raw = call_llm_json(STRUCTURED_EXTRACTION_PROMPT, user_payload, SCHEMA, max_tokens=1200)
+                field_map = normalize_field_map(field_map_raw)
 
-        field_map_raw = call_llm_json(STRUCTURED_EXTRACTION_PROMPT, user_payload, SCHEMA, max_tokens=1600)
-        field_map = normalize_field_map(field_map_raw, source_text)
+            with st.expander("🧩 Field map estructurado", expanded=False):
+                st.json(field_map)
 
-        with st.expander("🧪 Tipos del field_map", expanded=False):
-            type_debug = {k: str(type(v)) for k, v in field_map_raw.items()} if isinstance(field_map_raw, dict) else {}
-            st.json(type_debug)
+            seed_mt700 = build_mt700_from_map(field_map)
 
-        with st.expander("🧩 Field map estructurado", expanded=False):
-            st.json(field_map)
+            with st.expander("🧪 Seed MT700", expanded=False):
+                st.text_area("Seed", seed_mt700, height=320)
 
-        seed_mt700 = build_mt700_from_map(field_map)
+            with st.spinner("Generando MT700..."):
+                mt700 = call_llm_text(
+                    GENERATION_PROMPT,
+                    EXPECTED_GUIDE
+                    + "\n\nSTRUCTURED FIELD MAP:\n"
+                    + json.dumps(field_map, ensure_ascii=False, indent=2)
+                    + "\n\nSEED MT700:\n"
+                    + seed_mt700,
+                    max_tokens=1800
+                )
 
-        with st.expander("🧪 Seed MT700", expanded=False):
-            st.text_area("Seed", seed_mt700, height=400)
+            with st.expander("🧪 Raw MT700 model output", expanded=False):
+                st.text_area("Model output", mt700, height=320)
 
-        mt700 = call_llm_text(
-            GENERATION_PROMPT,
-            EXPECTED_GUIDE
-            + "\n\nSTRUCTURED FIELD MAP:\n"
-            + json.dumps(field_map, ensure_ascii=False, indent=2)
-            + "\n\nSEED MT700:\n"
-            + seed_mt700,
-            max_tokens=2200
-        )
+            mt700 = final_cleanup_mt700(mt700, seed_mt700=seed_mt700)
+            validation = validate_mt700(mt700)
 
-        with st.expander("🧪 Raw MT700 model output", expanded=False):
-            st.text_area("Model output", mt700, height=400)
+            st.session_state["source_text"] = source_text
+            st.session_state["field_map"] = field_map
+            st.session_state["field_map_raw"] = field_map_raw
+            st.session_state["seed_mt700"] = seed_mt700
+            st.session_state["mt700"] = mt700
+            st.session_state["validation"] = validation
+            st.success("✅ Generado")
 
-        if len(parse_mt700_fields(mt700)) < 5:
-            mt700 = seed_mt700
-
-        mt700 = final_cleanup_mt700(mt700, seed_mt700=seed_mt700)
-        validation = validate_mt700(mt700)
-
-        narrative_problem_fields = [
-            f for f in validation.get("defective_fields", [])
-            if f in NARRATIVE_TAGS
-        ]
-
-        translated_fields = {}
-        if narrative_problem_fields:
-            translated_fields = translate_narrative_fields(mt700, narrative_problem_fields, source_text)
-            mt700_repaired = replace_mt700_fields(mt700, translated_fields)
-            mt700_repaired = final_cleanup_mt700(mt700_repaired, seed_mt700=seed_mt700)
-            repaired_validation = validate_mt700(mt700_repaired)
-
-            if repaired_validation["score"] >= validation["score"]:
-                mt700 = mt700_repaired
-                validation = repaired_validation
-
-        mt700 = final_cleanup_mt700(mt700, seed_mt700=seed_mt700)
-        validation = validate_mt700(mt700)
-
-        st.session_state["source_text"] = source_text
-        st.session_state["field_map"] = field_map
-        st.session_state["field_map_raw"] = field_map_raw
-        st.session_state["translated_fields"] = translated_fields
-        st.session_state["seed_mt700"] = seed_mt700
-        st.session_state["mt700"] = mt700
-        st.session_state["validation"] = validation
-        st.success("✅ Generado")
+        except Exception as e:
+            st.error(f"Error durante la ejecución: {e}")
 
 if "mt700" in st.session_state:
     with st.expander("🧪 Debug persistido", expanded=False):
         st.json(st.session_state.get("field_map_raw", {}))
         st.json(st.session_state.get("field_map", {}))
-        st.json(st.session_state.get("translated_fields", {}))
         st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:5000], height=280)
-        st.text_area("Seed persistido", st.session_state.get("seed_mt700", ""), height=240)
+        st.text_area("Seed persistido", st.session_state.get("seed_mt700", ""), height=220)
 
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -807,18 +434,14 @@ if "mt700" in st.session_state:
         st.metric("Confianza", f"{st.session_state['validation']['score']}%")
         st.json(st.session_state["validation"])
 
-    parsed = parse_mt700_fields(edited)
-
     with st.expander("🧩 Campos parseados", expanded=False):
-        st.json(parsed)
+        st.json(parse_mt700_fields(edited))
 
     txt_data = edited.upper().encode("utf-8")
     json_data = json.dumps({
         "field_map_raw": st.session_state["field_map_raw"],
         "field_map": st.session_state["field_map"],
-        "translated_fields": st.session_state.get("translated_fields", {}),
-        "validation": st.session_state["validation"],
-        "parsed_fields": parsed
+        "validation": st.session_state["validation"]
     }, ensure_ascii=False, indent=2).encode("utf-8")
 
     c1, c2 = st.columns(2)
