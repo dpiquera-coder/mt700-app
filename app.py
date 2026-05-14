@@ -30,9 +30,8 @@ try:
 except Exception:
     pytesseract = None
 
-
 st.set_page_config(
-    page_title="MT700 Generator Anti-Hallucination v6.9.2",
+    page_title="MT700 Generator Anti-Hallucination v6.9",
     layout="wide",
     page_icon="🏦"
 )
@@ -106,7 +105,7 @@ textarea, .stTextArea textarea {{
 st.markdown("""
 <div class="mt700-hero">
   <p class="mt700-title">MT700 Generator</p>
-  <p class="mt700-subtitle">OCR MT700 + narrativa + auditoría explicativa + interpretación genérica de checkboxes</p>
+  <p class="mt700-subtitle">OCR MT700 + narrativa + auditoría explicativa + enfoque raw-first selectivo</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -138,7 +137,6 @@ FIELD_TO_TAG = {
     "field_48": "48", "field_49": "49", "field_57A": "57A", "field_71D": "71D",
     "field_78": "78", "field_72Z": "72Z"
 }
-
 TAG_TO_FIELD = {v: k for k, v in FIELD_TO_TAG.items()}
 
 FIELD_METADATA = {
@@ -172,6 +170,11 @@ FIELD_METADATA = {
 
 NARRATIVE_FIELDS = {"field_45A", "field_46A", "field_47A", "field_71D", "field_78", "field_72Z"}
 PARTY_FIELDS = {"field_50", "field_59"}
+RAW_FIRST_FIELDS = {
+    "field_50", "field_59", "field_45A", "field_46A", "field_47A", "field_71D", "field_78", "field_72Z",
+    "field_44E", "field_44F", "field_41A", "field_31D"
+}
+REWRITE_SAFE_FIELDS = {"field_46A", "field_71D"}
 
 VALID_40A_CODES = {
     "IRREVOCABLE",
@@ -179,7 +182,6 @@ VALID_40A_CODES = {
     "IRREVOCABLE STANDBY",
     "IRREVOC TRANS STANDBY"
 }
-
 VALID_40E_CODES = {
     "UCP LATEST VERSION",
     "EUCP LATEST VERSION",
@@ -187,9 +189,7 @@ VALID_40E_CODES = {
     "ISP LATEST VERSION",
     "OTHR"
 }
-
 VALID_49_CODES = {"CONFIRM", "MAY ADD", "WITHOUT"}
-
 VALID_41A_CODES = {
     "BY ACCEPTANCE",
     "BY DEF PAYMENT",
@@ -197,7 +197,6 @@ VALID_41A_CODES = {
     "BY NEGOTIATION",
     "BY PAYMENT"
 }
-
 VALID_43_CODES = {"ALLOWED", "CONDITIONAL", "NOT ALLOWED"}
 
 EXAMPLE_LIKE_VALUES = {
@@ -309,6 +308,7 @@ Strict rules:
 - For 43P and 43T, output only ALLOWED, CONDITIONAL, or NOT ALLOWED if supported.
 - For 49, output only CONFIRM, MAY ADD, or WITHOUT if supported.
 - Never create values from examples or defaults.
+- Raw-first fields must preserve document wording whenever it is already usable.
 """
 
 SYSTEM_NARRATIVE_REWRITE_PROMPT = """
@@ -402,16 +402,6 @@ def normalize_checkbox_line(text):
     return normalize_ocr_separators(text)
 
 
-def normalize_checkbox_text(text):
-    t = to_upper(text)
-    t = t.replace("☒", " X ").replace("☑", " X ").replace("[X]", " X ").replace("(X)", " X ")
-    t = re.sub(r"[|]+", " ", t)
-    t = re.sub(r"\s*:\s*", " : ", t)
-    t = re.sub(r"\s*-\s*", " - ", t)
-    t = re.sub(r"\s{2,}", " ", t)
-    return t.strip()
-
-
 def collect_lines(text):
     return [normalize_checkbox_line(ln) for ln in text.splitlines() if ln.strip()]
 
@@ -432,10 +422,8 @@ def nearest_marked_option(line, labels):
     x_positions = [m.start() for m in re.finditer(r"\bX\b", l)]
     if not x_positions:
         return ""
-
     best_label = ""
     best_dist = 10**9
-
     for label in labels:
         start = 0
         while True:
@@ -447,7 +435,6 @@ def nearest_marked_option(line, labels):
                 best_dist = dist
                 best_label = label
             start = idx + len(label)
-
     return best_label if best_dist <= 24 else ""
 
 
@@ -516,7 +503,10 @@ def empty_extraction_map():
             "evidence": None,
             "found": False,
             "confidence": 0,
-            "origin": ORIGIN_EXTRACTED
+            "origin": ORIGIN_EXTRACTED,
+            "raw_value": None,
+            "final_value": None,
+            "rewrite_applied": False
         }
     return out
 
@@ -527,12 +517,16 @@ def parse_extraction_object(data):
         raw = data.get(key, {}) if isinstance(data, dict) else {}
         if not isinstance(raw, dict):
             raw = {}
+        raw_value = clean_value(raw.get("value")) if raw.get("value") is not None else None
         out[key] = {
-            "value": clean_value(raw.get("value")) if raw.get("value") is not None else None,
+            "value": raw_value,
+            "raw_value": raw_value,
+            "final_value": raw_value,
             "evidence": clean_text(raw.get("evidence")) if raw.get("evidence") is not None else None,
             "found": bool(raw.get("found", False)),
             "confidence": int(raw.get("confidence", 0) or 0),
-            "origin": ORIGIN_EXTRACTED
+            "origin": ORIGIN_EXTRACTED,
+            "rewrite_applied": False
         }
     return out
 
@@ -577,25 +571,20 @@ def looks_like_bank_text(value):
 def evidence_supports_value(value, evidence, field_key):
     if not value or not evidence:
         return False
-
     if field_key in PARTY_FIELDS:
         return evidence_supports_party_value(value, evidence)
-
     v = normalized_for_match(value)
     e = normalized_for_match(evidence)
-
     if field_key in NARRATIVE_FIELDS:
         tokens = [t for t in re.split(r"[^A-Z0-9]+", v) if len(t) >= 4]
         if not tokens:
             return False
         overlap = sum(1 for t in tokens if t in e)
         return overlap >= max(1, min(3, len(tokens) // 3 or 1))
-
     plain = re.sub(r"\s+", "", v)
     plain_e = re.sub(r"\s+", "", e)
     if plain and plain in plain_e:
         return True
-
     tokens = [t for t in re.split(r"[^A-Z0-9]+", v) if len(t) >= 3]
     overlap = sum(1 for t in tokens if t in e)
     return overlap >= max(1, len(tokens) - 1)
@@ -624,79 +613,69 @@ def valid_yymmdd(value):
 
 def semantic_field_check(field_key, value):
     v = to_upper(value)
-
     if field_key == "field_20":
         if len(v) > 16:
             return False, "20 exceeds 16 characters"
         if v.startswith("/") or v.endswith("/") or "//" in v:
             return False, "20 cannot start/end with slash or contain double slash"
-
     elif field_key == "field_31C":
         if not valid_yymmdd(v):
             return False, "31C must be valid YYMMDD"
-
     elif field_key == "field_31D":
         m = re.match(r"^(\d{6})(.+)$", v)
         if not m:
             return False, "31D must be YYMMDD plus place"
         if not valid_yymmdd(m.group(1)):
             return False, "31D date invalid"
-
     elif field_key == "field_32B":
         if not re.fullmatch(r"[A-Z]{3}[0-9][0-9,\.]*", v.replace(" ", "")):
             return False, "32B must be currency+amount"
-
     elif field_key == "field_39A":
         if not re.fullmatch(r"\d{1,2}/\d{1,2}", v):
             return False, "39A must be tolerance format"
-
     elif field_key == "field_40A":
         if v not in VALID_40A_CODES:
             return False, "40A invalid code"
-
     elif field_key == "field_40E":
         if v not in VALID_40E_CODES and not v.startswith("OTHR"):
             return False, "40E invalid code"
-
     elif field_key == "field_41A":
         if "BY " not in v:
             return False, "41A missing availability code"
         ok_code = any(code in v for code in VALID_41A_CODES)
         if not ok_code:
             return False, "41A invalid availability code"
-
     elif field_key in {"field_43P", "field_43T"}:
         if v not in VALID_43_CODES:
             return False, f"{FIELD_TO_TAG[field_key]} invalid code"
-
     elif field_key == "field_48":
         if "%" in v:
             return False, "48 cannot contain percentage"
         if not re.fullmatch(r"\d{1,3}(/.+)?", v):
             return False, "48 invalid format"
-
     elif field_key == "field_49":
         if v not in VALID_49_CODES:
             return False, "49 invalid code"
-
     elif field_key == "field_50":
         if looks_like_bank_text(v):
             return False, "50 should be applicant, not bank field"
-
     elif field_key == "field_59":
         if looks_like_bank_text(v):
             return False, "59 should be beneficiary, not bank field"
-
     return True, ""
 
 
-def enrich_party_value_from_evidence(field_key, value, evidence):
-    if field_key not in PARTY_FIELDS:
-        return value
-    rebuilt = extract_party_from_evidence(evidence)
-    if rebuilt:
-        return rebuilt
-    return value
+def choose_candidate_value(field_key, value, evidence, origin):
+    raw_value = clean_value(value) if value else ""
+    if not raw_value:
+        return ""
+    if field_key in RAW_FIRST_FIELDS:
+        return raw_value
+    if field_key in PARTY_FIELDS and origin != ORIGIN_DIRECT_OCR_MT700:
+        rebuilt = extract_party_from_evidence(evidence)
+        if rebuilt and evidence_supports_party_value(rebuilt, evidence):
+            return rebuilt
+    return raw_value
 
 
 def normalize_amount_for_32B(amount_text):
@@ -718,18 +697,6 @@ def normalize_to_yymmdd(raw):
     if len(digits) == 8:
         return digits[2:]
     return ""
-
-
-def clean_place_candidate(value):
-    v = clean_value(value)
-    v = v.split("\n")[0]
-    v = re.split(
-        r"\b(NO M[ÁA]S TARDE DEL|LATEST DATE OF SHIPMENT|DIVISA E IMPORTE|CREDITO UTILIZABLE|CR[EÉ]DITO UTILIZABLE|EXPEDICIONES PARCIALES|TRANSBORDOS|DOCUMENTOS A PRESENTAR)\b",
-        v
-    )[0]
-    v = re.sub(r"\b(TEL|TLF|ACC|ACCOUNT|SWIFT)\b.*$", "", v).strip(" ,.-")
-    v = re.sub(r"\s{2,}", " ", v)
-    return v
 
 
 def fix_common_ocr_swift_noise(text):
@@ -761,7 +728,6 @@ def parse_ocr_mt700_blocks(source_text):
     tags = ALLOWED_TAGS[:]
     tag_alt = "|".join(sorted(tags, key=len, reverse=True))
     results = {}
-
     for tag in tags:
         pattern = rf"(?ms)(?:^|\n)\s*:?\s*{re.escape(tag)}\s+(.+?)(?=(?:\n\s*:?\s*(?:{tag_alt})\s)|\n\s*-\}}|\Z)"
         m = re.search(pattern, t)
@@ -769,12 +735,10 @@ def parse_ocr_mt700_blocks(source_text):
             value = clean_value(m.group(1).strip(" :\n\t"))
             if value:
                 results[tag] = value
-
     if "41A" in results:
         val = results["41A"]
         val = re.sub(r"\b([A-Z0-9]{8,11})\s+(BY (?:ACCEPTANCE|DEF PAYMENT|MIXED PYMT|NEGOTIATION|PAYMENT))\b", r"\1 \2", val)
         results["41A"] = val
-
     return results
 
 
@@ -784,17 +748,19 @@ def merge_direct_ocr_into_extraction(extracted, source_text):
         key = TAG_TO_FIELD.get(tag)
         if not key:
             continue
-
         ok, _ = semantic_field_check(key, value)
         if not ok and key not in NARRATIVE_FIELDS and key not in PARTY_FIELDS:
             continue
-
+        cleaned = clean_value(value)
         extracted[key] = {
-            "value": clean_value(value),
+            "value": cleaned,
+            "raw_value": cleaned,
+            "final_value": cleaned,
             "evidence": clean_text(f"{tag} {value}")[:1200],
             "found": True,
             "confidence": 98,
-            "origin": ORIGIN_DIRECT_OCR_MT700
+            "origin": ORIGIN_DIRECT_OCR_MT700,
+            "rewrite_applied": False
         }
     return extracted, direct
 
@@ -830,7 +796,6 @@ def infer_checkbox_selection_for_43p(text):
     for line in lines:
         if "EXPEDICIONES PARCIALES" not in line and "PARTIAL SHIPMENT" not in line and "PARTIAL SHIPMENTS" not in line:
             continue
-
         chosen = nearest_marked_option(line, ["AUTORIZADAS", "PROHIBIDAS", "CONDICIONALES"])
         if chosen == "AUTORIZADAS":
             return "ALLOWED"
@@ -846,7 +811,6 @@ def infer_checkbox_selection_for_43t(text):
     for line in lines:
         if "TRANSBORDOS" not in line and "TRANSHIPMENT" not in line and "TRANSHIPMENTS" not in line:
             continue
-
         chosen = nearest_marked_option(line, ["PERMITIDOS", "PROHIBIDOS", "CONDICIONALES"])
         if chosen == "PERMITIDOS":
             return "ALLOWED"
@@ -860,7 +824,6 @@ def infer_checkbox_selection_for_43t(text):
 def infer_checked_documents_for_46A(source_text):
     docs = []
     lines = collect_lines(source_text)
-
     for line in lines:
         if "FACTURA COMERCIAL" in line and line_has_marker_near_label(line, "FACTURA COMERCIAL"):
             docs.append("SIGNED COMMERCIAL INVOICE IN 3 COPIES")
@@ -882,7 +845,6 @@ def infer_checked_documents_for_46A(source_text):
             docs.append("INTERNATIONAL ROAD WAYBILL (CMR)")
         elif "CIM" in line and "X" in line:
             docs.append("RAIL WAYBILL (CIM)")
-
     deduped = []
     seen = set()
     for d in docs:
@@ -920,33 +882,8 @@ def infer_field_20_from_text(source_text):
         m = re.search(p, t)
         if not m:
             continue
-        candidate = re.sub(r"\s+", "", m.group(1))[:16]
-        ok, msg = semantic_field_check("field_20", candidate)
-        if ok:
-            return candidate
-    return ""
-
-
-def infer_field_31C_from_text(source_text):
-    t = to_upper(source_text)
-    patterns = [
-        r"FIGUERAS\s+A\s+([0-9]{2}[\/\-][0-9]{2}[\/\-][0-9]{4})",
-        r"\b31C\s*[: ]\s*([0-9]{6})",
-        r"\bFECHA\s*[: ]\s*([0-9]{6,8})"
-    ]
-    for p in patterns:
-        m = re.search(p, t)
-        if not m:
-            continue
-        raw = m.group(1)
-        digits = re.sub(r"\D", "", raw)
-        if len(digits) == 8:
-            candidate = digits[6:8] + digits[2:4] + digits[0:2]
-        elif len(digits) == 6:
-            candidate = digits
-        else:
-            candidate = ""
-        ok, msg = semantic_field_check("field_31C", candidate)
+        candidate = re.sub(r"\s+", "", m.group(1)).strip()[:16]
+        ok, _ = semantic_field_check("field_20", candidate)
         if ok:
             return candidate
     return ""
@@ -972,23 +909,21 @@ def infer_expiry_place_from_text(source_text):
     t = to_upper(source_text)
     patterns = [
         r"\b31D\s*[: ]\s*[0-9]{6}\s*([A-Z][A-Z ,\-.]{2,40})",
-        r"LUGAR Y FECHA DE VENCIMIENTO\s*[:\-]?\s*[0-9]{6,8}\s*[-,:]?\s*([A-Z][A-Z ,\-.]{2,40})",
-        r"EXPIRY(?: PLACE)?(?: AND DATE)?\s*[:\-]?\s*[0-9]{6,8}\s*[-,:]?\s*([A-Z][A-Z ,\-.]{2,40})"
+        r"LUGAR Y FECHA DE VENCIMIENTO\s*[0-9]{6,8}\s*[-,:]?\s*([A-Z][A-Z ,\-.]{2,40})",
+        r"EXPIRY(?: PLACE)?(?: AND DATE)?\s*[0-9]{6,8}\s*[-,:]?\s*([A-Z][A-Z ,\-.]{2,40})"
     ]
     for p in patterns:
         m = re.search(p, t)
         if m:
-            place = clean_place_candidate(m.group(1))
+            place = re.sub(r"\s{2,}", " ", m.group(1)).strip(" ,.-")
             if place:
                 return place
-
-    if "BARCELONA, SPAIN" in t:
-        return "BARCELONA"
-    if "BARCELONA" in t:
-        return "BARCELONA"
+    if "HONG KONG" in t:
+        return "HONG KONG"
     if "MADRID" in t:
         return "MADRID"
-
+    if "BARCELONA" in t:
+        return "BARCELONA"
     return ""
 
 
@@ -997,7 +932,7 @@ def infer_field_31D_from_text(source_text):
     place = infer_expiry_place_from_text(source_text)
     if yymmdd and place:
         candidate = f"{yymmdd}{place}"
-        ok, msg = semantic_field_check("field_31D", candidate)
+        ok, _ = semantic_field_check("field_31D", candidate)
         if ok:
             return candidate
     return ""
@@ -1022,7 +957,7 @@ def infer_field_32B_from_text(source_text):
         else:
             amt, ccy = g1, g2
         candidate = f"{ccy}{normalize_amount_for_32B(amt)}"
-        ok, msg = semantic_field_check("field_32B", candidate)
+        ok, _ = semantic_field_check("field_32B", candidate)
         if ok:
             return candidate
     return ""
@@ -1032,8 +967,8 @@ def infer_field_39A_from_text(source_text):
     t = to_upper(source_text)
     patterns = [
         r"\b39A\s*[: ]\s*(\d{1,2}/\d{1,2})",
-        r"TOLERANCE\s*[:\-]?\s*(\d{1,2})\s*PCT",
-        r"ALLOWED TOLERANCE\s*[:\-]?\s*(\d{1,2})\s*PCT"
+        r"TOLERANCE\s*[-:]?\s*(\d{1,2})\s*PCT",
+        r"ALLOWED TOLERANCE\s*[-:]?\s*(\d{1,2})\s*PCT"
     ]
     for p in patterns:
         m = re.search(p, t)
@@ -1042,10 +977,9 @@ def infer_field_39A_from_text(source_text):
                 candidate = m.group(1)
             else:
                 candidate = f"{m.group(1)}/{m.group(1)}"
-            ok, msg = semantic_field_check("field_39A", candidate)
+            ok, _ = semantic_field_check("field_39A", candidate)
             if ok:
                 return candidate
-
     checkbox_candidate = infer_tolerance_from_checkboxes(source_text)
     if checkbox_candidate:
         return checkbox_candidate
@@ -1054,76 +988,48 @@ def infer_field_39A_from_text(source_text):
 
 def infer_bic_from_text(source_text):
     t = to_upper(source_text)
-
-    preferred_patterns = [
-        r"SWIFT\.?\s*([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)",
-        r"SWIFT CODE\s*[: ]\s*([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)",
-        r"\b([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\b"
-    ]
-
-    all_bics = []
-    for p in preferred_patterns:
+    patterns = [r"\b([A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?)\b"]
+    for p in patterns:
         for m in re.finditer(p, t):
             bic = m.group(1)
             if len(bic) in (8, 11):
-                all_bics.append(bic)
-
-    ranked = []
-    for bic in all_bics:
-        score = 0
-        if bic == "PCBCCNBJGDX":
-            score += 100
-        if bic.startswith("PCBC") or bic.startswith("PCBCCN"):
-            score += 20
-        if bic.startswith("BSCH"):
-            score -= 20
-        ranked.append((score, bic))
-
-    ranked.sort(reverse=True)
-    return ranked[0][1] if ranked else ""
+                return bic
+    return ""
 
 
 def infer_field_41A_from_text(source_text):
     t = to_upper(source_text)
     patterns = [
         r"\b41A\s*[: ]\s*([A-Z0-9]{8,11})\s*(BY (?:ACCEPTANCE|DEF PAYMENT|MIXED PYMT|NEGOTIATION|PAYMENT))",
-        r"\b([A-Z]{6}[A-Z0-9]{2}(?:[A-Z0-9]{3})?)\s*(BY (?:ACCEPTANCE|DEF PAYMENT|MIXED PYMT|NEGOTIATION|PAYMENT))"
+        r"\b([A-Z0-9]{8,11})\s*(BY (?:ACCEPTANCE|DEF PAYMENT|MIXED PYMT|NEGOTIATION|PAYMENT))"
     ]
     for p in patterns:
         m = re.search(p, t)
         if m:
             candidate = f"{m.group(1)} {m.group(2)}"
-            ok, msg = semantic_field_check("field_41A", candidate)
+            ok, _ = semantic_field_check("field_41A", candidate)
             if ok:
                 return candidate
-
     checkbox_method = infer_payment_method_from_checkboxes(source_text)
-    bic = infer_bic_from_text(source_text)
-
-    if checkbox_method and bic:
-        candidate = f"{bic} {checkbox_method}"
-        ok, msg = semantic_field_check("field_41A", candidate)
-        if ok:
-            return candidate
-
-    if re.search(r"\bPARA\s+X\s+PAGO\b", normalize_checkbox_text(source_text)) and bic:
-        candidate = f"{bic} BY PAYMENT"
-        ok, msg = semantic_field_check("field_41A", candidate)
-        if ok:
-            return candidate
-
-    if ("A LA VISTA" in t or "AT SIGHT" in t) and bic:
-        candidate = f"{bic} BY PAYMENT"
-        ok, msg = semantic_field_check("field_41A", candidate)
-        if ok:
-            return candidate
-
+    if checkbox_method:
+        bic = infer_bic_from_text(source_text)
+        if bic:
+            candidate = f"{bic} {checkbox_method}"
+            ok, _ = semantic_field_check("field_41A", candidate)
+            if ok:
+                return candidate
+    if "A LA VISTA" in t or "AT SIGHT" in t:
+        bic = infer_bic_from_text(source_text)
+        if bic:
+            candidate = f"{bic} BY PAYMENT"
+            ok, _ = semantic_field_check("field_41A", candidate)
+            if ok:
+                return candidate
     return ""
 
 
 def infer_field_43P_from_text(source_text):
     t = normalize_ocr_separators(source_text)
-
     allowed_patterns = [
         r"\b43P\s*[: ]\s*ALLOWED\b",
         r"\bPARTIAL\s+SHIPMENTS?\s*[:/\-|]?\s*ALLOWED\b",
@@ -1140,7 +1046,6 @@ def infer_field_43P_from_text(source_text):
         r"\bPARTIAL\s+SHIPMENTS?\s*[:/\-|]?\s*CONDITIONAL\b",
         r"\bEXPEDICIONES?\s+PARCIALES?\s*[:/\-|]?\s*CONDICIONALES?\b"
     ]
-
     for p in allowed_patterns:
         if re.search(p, t):
             return "ALLOWED"
@@ -1150,17 +1055,14 @@ def infer_field_43P_from_text(source_text):
     for p in conditional_patterns:
         if re.search(p, t):
             return "CONDITIONAL"
-
     checkbox_value = infer_checkbox_selection_for_43p(t)
     if checkbox_value:
         return checkbox_value
-
     return ""
 
 
 def infer_field_43T_from_text(source_text):
     t = normalize_ocr_separators(source_text)
-
     allowed_patterns = [
         r"\b43T\s*[: ]\s*ALLOWED\b",
         r"\bTRANSBORDOS?\s*[:/\-|]?\s*PERMITIDOS?\b",
@@ -1177,7 +1079,6 @@ def infer_field_43T_from_text(source_text):
         r"\bTRANSBORDOS?\s*[:/\-|]?\s*CONDICIONALES?\b",
         r"\bTRANSHIPMENTS?\s*[:/\-|]?\s*CONDITIONAL\b"
     ]
-
     for p in allowed_patterns:
         if re.search(p, t):
             return "ALLOWED"
@@ -1187,11 +1088,9 @@ def infer_field_43T_from_text(source_text):
     for p in conditional_patterns:
         if re.search(p, t):
             return "CONDITIONAL"
-
     checkbox_value = infer_checkbox_selection_for_43t(t)
     if checkbox_value:
         return checkbox_value
-
     return ""
 
 
@@ -1199,14 +1098,13 @@ def infer_field_44E_from_text(source_text):
     t = to_upper(source_text)
     patterns = [
         r"\b44E\s*[: ]\s*([A-Z].+)",
-        r"EMBARQUE\s*:\s*DESDE\s*([A-Z][A-Z0-9 ,\-\.]+)",
-        r"EMBARQUE DESDE\s*([A-Z][A-Z0-9 ,\-\.]+)",
+        r"EMBARQUE DESDE\s*([A-Z][A-Z ,]+)",
         r"FROM\s*([A-Z][A-Z ,]+)"
     ]
     for p in patterns:
         m = re.search(p, t)
         if m:
-            value = clean_place_candidate(m.group(1))[:80]
+            value = clean_value(m.group(1)).split("\n")[0][:80]
             if value:
                 return value
     return ""
@@ -1216,22 +1114,15 @@ def infer_field_44F_from_text(source_text):
     t = to_upper(source_text)
     patterns = [
         r"\b44F\s*[: ]\s*([A-Z].+)",
-        r"CON DESTINO A\s*:\s*([A-Z][A-Z0-9 ,\-\.]+)",
-        r"CON DESTINO A\s*([A-Z][A-Z0-9 ,\-\.]+)",
+        r"CON DESTINO A\s*([A-Z][A-Z ,]+)",
         r"TO\s*([A-Z][A-Z ,]+)"
     ]
     for p in patterns:
         m = re.search(p, t)
         if m:
-            raw = m.group(1)
-            value = clean_place_candidate(raw)[:80]
-            ok, msg = semantic_field_check("field_44F", value)
-            if ok and value:
+            value = clean_value(m.group(1)).split("\n")[0][:80]
+            if value:
                 return value
-
-    if "CON DESTINO A BARCELONA, SPAIN" in t or "BARCELONA, SPAIN NO M" in t:
-        return "BARCELONA, SPAIN"
-
     return ""
 
 
@@ -1239,7 +1130,7 @@ def infer_field_44C_from_text(source_text):
     t = to_upper(source_text)
     patterns = [
         r"\b44C\s*[: ]\s*([0-9]{6})",
-        r"NO M[ÁA]S TARDE DEL\s*[:\-]?\s*([0-9]{6,8})",
+        r"NO M[ÁA]S TARDE DEL\s*([0-9]{6,8})",
         r"LATEST DATE OF SHIPMENT\s*[:\-]?\s*([0-9]{6,8})"
     ]
     for p in patterns:
@@ -1261,14 +1152,11 @@ def infer_field_46A_from_checkboxes(source_text):
 def infer_mt700_defaults(source_text, verified_map):
     t = to_upper(source_text)
     inferred = {}
-
     has_lc_context = any(x in t for x in [
         "LETTER OF CREDIT", "DOCUMENTARY CREDIT", "CREDITO DOCUMENTARIO", "CRÉDITO DOCUMENTARIO", "MT700"
     ])
-
     infer_map = {
         "field_20": infer_field_20_from_text,
-        "field_31C": infer_field_31C_from_text,
         "field_31D": infer_field_31D_from_text,
         "field_32B": infer_field_32B_from_text,
         "field_39A": infer_field_39A_from_text,
@@ -1281,7 +1169,6 @@ def infer_mt700_defaults(source_text, verified_map):
         "field_46A": infer_field_46A_from_checkboxes,
         "field_71D": infer_field_71D_from_checkboxes,
     }
-
     for field_key, fn in infer_map.items():
         if not verified_map[field_key]["accepted"]:
             value = fn(source_text)
@@ -1291,14 +1178,12 @@ def infer_mt700_defaults(source_text, verified_map):
                     "reason": f"Recovered from source text / checkbox logic for {field_key}",
                     "origin": ORIGIN_CHECKBOX_INFERRED if field_key in {"field_39A", "field_41A", "field_43P", "field_43T", "field_46A", "field_71D"} else ORIGIN_INFERRED
                 }
-
     if not verified_map["field_40A"]["accepted"] and has_lc_context:
         inferred["field_40A"] = {
             "value": "IRREVOCABLE",
             "reason": "Inferred from LC context",
             "origin": ORIGIN_INFERRED
         }
-
     if not verified_map["field_40E"]["accepted"] and has_lc_context:
         if "EUCP" in t:
             value = "EUCP LATEST VERSION"
@@ -1313,31 +1198,26 @@ def infer_mt700_defaults(source_text, verified_map):
             "reason": "Inferred from applicable rules context",
             "origin": ORIGIN_INFERRED
         }
-
-    if not verified_map["field_31C"]["accepted"] and "field_31C" not in inferred:
+    if not verified_map["field_31C"]["accepted"]:
         date_candidates = [
             re.search(r"\b31C\s*[: ]\s*([0-9]{6})", t),
-            re.search(r"FIGUERAS\s+A\s+([0-9]{2}[\/\-][0-9]{2}[\/\-][0-9]{4})", t),
             re.search(r"\bFECHA\s*([0-9]{6,8})", t),
         ]
         picked = ""
+        picked_origin = ORIGIN_SYSTEM_DEFAULT
+        picked_reason = "System fallback issue date when absent"
         for m in date_candidates:
             if m:
-                raw = m.group(1)
-                digits = re.sub(r"\D", "", raw)
-                if len(digits) == 8:
-                    picked = digits[6:8] + digits[2:4] + digits[0:2]
-                elif len(digits) == 6:
-                    picked = digits
+                picked = normalize_to_yymmdd(m.group(1))
                 if picked:
+                    picked_origin = ORIGIN_INFERRED
+                    picked_reason = "Recovered from source issue date"
                     break
-
         inferred["field_31C"] = {
             "value": picked if picked else datetime.now().strftime("%y%m%d"),
-            "reason": "System/source fallback issue date when absent",
-            "origin": ORIGIN_SYSTEM_DEFAULT
+            "reason": picked_reason,
+            "origin": picked_origin
         }
-
     if not verified_map["field_49"]["accepted"]:
         if any(x in t for x in [
             "WITHOUT CONFIRMATION",
@@ -1352,7 +1232,6 @@ def infer_mt700_defaults(source_text, verified_map):
                 "reason": "Inferred from no-confirmation wording",
                 "origin": ORIGIN_INFERRED
             }
-
     if not verified_map["field_48"]["accepted"] and has_lc_context:
         m = re.search(r"\b48\s*[: ]\s*(\d{1,3}(?:/[A-Z ].+)?)", t)
         if m:
@@ -1375,7 +1254,6 @@ def infer_mt700_defaults(source_text, verified_map):
                     "reason": "Default presentation period when absent",
                     "origin": ORIGIN_SYSTEM_DEFAULT
                 }
-
     return inferred
 
 
@@ -1385,21 +1263,22 @@ def apply_inferred_defaults(verified_map, inferred):
         current = verified_map.get(key, {})
         if current.get("accepted"):
             continue
-
         value = meta["value"]
         ok, msg = semantic_field_check(key, value)
         if not ok and key not in {"field_46A", "field_71D"}:
             audit.append(f"{key}: inferred/default value rejected: {msg}")
             continue
-
         verified_map[key] = {
             "value": value,
+            "raw_value": value,
+            "final_value": value,
             "evidence": "",
             "found": True,
             "confidence": 100 if meta["origin"] == ORIGIN_SYSTEM_DEFAULT else 85,
             "accepted": True,
             "reason": meta["reason"],
-            "origin": meta["origin"]
+            "origin": meta["origin"],
+            "rewrite_applied": False
         }
         audit.append(f"{key}: accepted by {meta['origin']} -> {value}")
     return verified_map, audit
@@ -1408,21 +1287,19 @@ def apply_inferred_defaults(verified_map, inferred):
 def verify_extraction(extracted, source_text):
     verified = {}
     audit = []
-
     for key in FIELD_KEYS:
         item = extracted.get(key, {"value": None, "evidence": None, "found": False, "confidence": 0, "origin": ORIGIN_EXTRACTED})
         value = item.get("value")
+        raw_value = item.get("raw_value") or value
         evidence = item.get("evidence")
         found = bool(item.get("found"))
         confidence = int(item.get("confidence", 0) or 0)
         origin = item.get("origin", ORIGIN_EXTRACTED)
-
         accepted = False
         reason = ""
-
+        final_value = ""
         if found and value and evidence:
-            candidate_value = enrich_party_value_from_evidence(key, value, evidence)
-
+            candidate_value = choose_candidate_value(key, raw_value, evidence, origin)
             if looks_like_example_leak(key, candidate_value, evidence):
                 reason = "Rejected: example-like value not present in evidence"
             elif origin != ORIGIN_DIRECT_OCR_MT700 and not evidence_supports_value(candidate_value, evidence, key):
@@ -1435,62 +1312,65 @@ def verify_extraction(extracted, source_text):
                     reason = "Rejected: confidence below threshold"
                 else:
                     accepted = True
-                    value = candidate_value
+                    final_value = candidate_value
         else:
             reason = "Rejected: missing found/value/evidence"
-
         if key == "field_27" and not accepted:
             verified[key] = {
                 "value": "1/1",
+                "raw_value": "1/1",
+                "final_value": "1/1",
                 "evidence": "",
                 "found": True,
                 "confidence": 100,
                 "accepted": True,
                 "reason": "Accepted by operational default",
-                "origin": ORIGIN_OPERATIONAL_DEFAULT
+                "origin": ORIGIN_OPERATIONAL_DEFAULT,
+                "rewrite_applied": False
             }
             audit.append(f"{key}: accepted by operational default 1/1")
             continue
-
         verified[key] = {
-            "value": value if accepted else "",
+            "value": final_value if accepted else "",
+            "raw_value": raw_value if accepted else "",
+            "final_value": final_value if accepted else "",
             "evidence": evidence if accepted else "",
             "found": accepted,
             "confidence": confidence if accepted else 0,
             "accepted": accepted,
             "reason": "Accepted" if accepted else reason,
-            "origin": origin if accepted else ""
+            "origin": origin if accepted else "",
+            "rewrite_applied": False
         }
-        audit.append(f"{key}: {'ACCEPTED' if accepted else reason}")
-
+        audit.append(f"{key}: {'ACCEPTED' if accepted else reason} | raw={raw_value} | final={final_value if accepted else ''}")
     inferred = infer_mt700_defaults(source_text, verified)
     verified, infer_audit = apply_inferred_defaults(verified, inferred)
     audit.extend(infer_audit)
-
     return verified, audit
 
 
 def rewrite_supported_narratives(verified_map):
     payload = {}
-    for key in NARRATIVE_FIELDS:
+    for key in REWRITE_SAFE_FIELDS:
         item = verified_map.get(key, {})
         if item.get("accepted") and item.get("value") and (item.get("evidence") or item.get("origin") in {ORIGIN_DIRECT_OCR_MT700, ORIGIN_CHECKBOX_INFERRED, ORIGIN_INFERRED, ORIGIN_SYSTEM_DEFAULT}):
             payload[key] = {
                 "value": item["value"],
                 "evidence": item.get("evidence", item["value"])
             }
-
     if not payload:
         return {}
-
     user_text = json.dumps(payload, ensure_ascii=False, indent=2)
     rewritten = call_llm_json(SYSTEM_NARRATIVE_REWRITE_PROMPT, user_text, max_tokens=1400)
-
     out = {}
     for key, original in payload.items():
         candidate = rewritten.get(key)
         if isinstance(candidate, str) and candidate.strip():
-            out[key] = clean_value(candidate)
+            cleaned = clean_value(candidate)
+            if cleaned != clean_value(original["value"]):
+                out[key] = cleaned
+            else:
+                out[key] = original["value"]
         else:
             out[key] = original["value"]
     return out
@@ -1519,13 +1399,11 @@ def enrich_validation_messages(messages):
         if not m:
             enriched.append(msg)
             continue
-
         tag = m.group(1)
         field_key = TAG_TO_FIELD.get(tag)
         meta = FIELD_METADATA.get(field_key, {})
         name = meta.get("name", "")
         desc = meta.get("description", "")
-
         if name or desc:
             enriched.append(f"{msg} | {name} - {desc}")
         else:
@@ -1537,11 +1415,9 @@ def validate_mt700(mt700, verified_map):
     fields = parse_mt700_fields(mt700)
     issues = []
     warnings = []
-
     for tag in fields:
         if tag not in ALLOWED_TAGS:
             issues.append(f"Forbidden tag detected :{tag}:")
-
     for key in FIELD_KEYS:
         tag = FIELD_TO_TAG[key]
         accepted = verified_map.get(key, {}).get("accepted", False)
@@ -1549,21 +1425,16 @@ def validate_mt700(mt700, verified_map):
             issues.append(f"Accepted field missing in final MT700 :{tag}:")
         if not accepted and tag in fields and key != "field_27":
             issues.append(f"Unverified field leaked into final MT700 :{tag}:")
-
     for mandatory_tag in MANDATORY_IN_SCOPE:
         key = TAG_TO_FIELD[mandatory_tag]
         if not verified_map.get(key, {}).get("accepted", False):
             warnings.append(f"Mandatory MT700 field not supported by source/default logic and therefore omitted :{mandatory_tag}:")
-
     if verified_map.get("field_48", {}).get("origin") == ORIGIN_SYSTEM_DEFAULT:
         warnings.append("48 inserted by default rule: absence implies 21 days where applicable")
-
     if verified_map.get("field_31C", {}).get("origin") == ORIGIN_SYSTEM_DEFAULT:
-        warnings.append("31C inserted by system/source fallback issue date")
-
+        warnings.append("31C inserted by system fallback issue date")
     issues = enrich_validation_messages(issues)
     warnings = enrich_validation_messages(warnings)
-
     score = max(0, 100 - len(issues) * 10 - len(warnings) * 3)
     return {
         "is_valid": len(issues) == 0,
@@ -1586,9 +1457,12 @@ def extraction_table_rows(verified_map):
             "accepted": item.get("accepted", False),
             "origin": item.get("origin", ""),
             "confidence": item.get("confidence", 0),
+            "raw_value": item.get("raw_value", ""),
+            "final_value": item.get("final_value", item.get("value", "")),
             "value": item.get("value", ""),
             "evidence": item.get("evidence", ""),
-            "reason": item.get("reason", "")
+            "reason": item.get("reason", ""),
+            "rewrite_applied": item.get("rewrite_applied", False)
         })
     return rows
 
@@ -1597,7 +1471,7 @@ if not tesseract_available():
     st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
 
 st.markdown(
-    '<p class="small-note">Versión v6.9.2: refuerzo específico para 31C, 31D, 41A y 44F basado en OCR real del formulario.</p>',
+    '<p class="small-note">Versión v6.9: raw-first selectivo para fields documentales/narrativos, preservando validación estricta en códigos SWIFT.</p>',
     unsafe_allow_html=True
 )
 
@@ -1609,13 +1483,11 @@ if st.button("🚀 Generar MT700"):
             with st.spinner("Extrayendo texto de documentos..."):
                 full_parts = []
                 debug = []
-
                 for f in files:
                     name = f.name.lower()
                     data = f.getvalue()
                     txt = ""
                     mode = "unknown"
-
                     if name.endswith(".pdf"):
                         native = extract_pdf_text_native(data)
                         ocr = extract_pdf_ocr_all_pages(data, max_pages=6)
@@ -1639,7 +1511,6 @@ if st.button("🚀 Generar MT700"):
                         except Exception:
                             txt = ""
                             mode = "unknown"
-
                     txt = clean_text(txt)
                     full_parts.append(f"### {f.name}\n{txt}")
                     debug.append({
@@ -1648,7 +1519,6 @@ if st.button("🚀 Generar MT700"):
                         "chars": len(txt),
                         "preview": txt[:1200]
                     })
-
                 source_text = "\n\n".join(full_parts)
 
             with st.expander("🧪 Debug extracción", expanded=False):
@@ -1673,10 +1543,13 @@ if st.button("🚀 Generar MT700"):
                 st.json(extraction_table_rows(verified_map))
                 st.text("\n".join(audit))
 
-            with st.spinner("Reescribiendo narrativas soportadas..."):
+            with st.spinner("Reescribiendo solo narrativas seguras..."):
                 narrative_updates = rewrite_supported_narratives(verified_map)
                 for key, new_val in narrative_updates.items():
+                    old_val = verified_map[key]["value"]
                     verified_map[key]["value"] = new_val
+                    verified_map[key]["final_value"] = new_val
+                    verified_map[key]["rewrite_applied"] = clean_value(new_val) != clean_value(old_val)
 
             mt700 = build_mt700_from_verified_map(verified_map)
             validation = validate_mt700(mt700, verified_map)
@@ -1689,7 +1562,7 @@ if st.button("🚀 Generar MT700"):
             st.session_state["validation"] = validation
             st.session_state["direct_ocr_map"] = direct_ocr_map
 
-            st.success("✅ Generado con parser OCR-MT700, control anti-alucinación y refuerzo específico para 31C/31D/41A/44F")
+            st.success("✅ Generado con enfoque raw-first selectivo")
 
         except Exception as e:
             st.error(f"Error durante la ejecución: {e}")
@@ -1701,39 +1574,4 @@ if "mt700" in st.session_state:
         st.json(st.session_state.get("verified_map", {}))
         st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:12000], height=320)
 
-    col1, col2 = st.columns([2, 1])
-
-    with col1:
-        st.text_area("📡 MT700", st.session_state["mt700"], height=700)
-
-    with col2:
-        st.metric("Confianza", f"{st.session_state['validation']['score']}%")
-        st.json(st.session_state["validation"])
-
-    with st.expander("🧾 Evidencia por campo", expanded=False):
-        st.json(extraction_table_rows(st.session_state["verified_map"]))
-
-    txt_data = st.session_state["mt700"].encode("utf-8")
-    json_data = json.dumps({
-        "raw_extraction": st.session_state["raw_extraction"],
-        "direct_ocr_map": st.session_state.get("direct_ocr_map", {}),
-        "verified_map": st.session_state["verified_map"],
-        "audit": st.session_state["audit"],
-        "validation": st.session_state["validation"]
-    }, ensure_ascii=False, indent=2).encode("utf-8")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.download_button(
-            "⬇️ Descargar MT700 TXT",
-            txt_data,
-            file_name="MT700_ANTI_HALLUCINATION_V692.txt",
-            mime="text/plain"
-        )
-    with c2:
-        st.download_button(
-            "⬇️ Descargar auditoría JSON",
-            json_data,
-            file_name="MT700_AUDIT_V692.json",
-            mime="application/json"
-        )
+    col1, col2 = st.columns([2, 1]
