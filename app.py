@@ -5,6 +5,7 @@ import json
 import re
 import subprocess
 import tempfile
+import shutil
 from typing import Dict, Optional, List, Tuple
 
 try:
@@ -17,8 +18,18 @@ try:
 except Exception:
     docx = None
 
-st.set_page_config(page_title="MT700 Generator v3.1 PDF Page1", layout="wide")
-st.title("📡 MT700 Generator - Trade Finance v3.1 (PDF página 1)")
+try:
+    from PIL import Image
+except Exception:
+    Image = None
+
+try:
+    import pytesseract
+except Exception:
+    pytesseract = None
+
+st.set_page_config(page_title="MT700 Generator v3.1 PDF Page1 OCR", layout="wide")
+st.title("📡 MT700 Generator - Trade Finance v3.1 (PDF página 1 + OCR fallback)")
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
@@ -165,6 +176,9 @@ MANDATORY_FIELDS = [
     "43P", "43T", "44E", "44F", "44C", "45A", "46A", "47A", "48", "49", "57A", "71D", "78", "72Z"
 ]
 
+def tesseract_available() -> bool:
+    return shutil.which("tesseract") is not None and pytesseract is not None and Image is not None
+
 def safe_json_load(text: str) -> Dict:
     try:
         return json.loads(text)
@@ -294,6 +308,21 @@ def extract_pdf_first_page_words(data: bytes) -> str:
     except Exception:
         return ""
 
+def extract_pdf_first_page_ocr(data: bytes) -> str:
+    if not fitz or not tesseract_available():
+        return ""
+    try:
+        doc = fitz.open(stream=data, filetype="pdf")
+        if doc.page_count == 0:
+            return ""
+        page = doc[0]
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        text = pytesseract.image_to_string(img, lang="spa+eng")
+        return text.strip()
+    except Exception:
+        return ""
+
 def extract_pdf_first_page_best(data: bytes) -> Tuple[str, str]:
     text_mode = extract_pdf_first_page_text(data)
     if len(text_mode.strip()) > 80:
@@ -306,6 +335,10 @@ def extract_pdf_first_page_best(data: bytes) -> Tuple[str, str]:
     words_mode = extract_pdf_first_page_words(data)
     if len(words_mode.strip()) > 80:
         return words_mode, "words"
+
+    ocr_mode = extract_pdf_first_page_ocr(data)
+    if len(ocr_mode.strip()) > 80:
+        return ocr_mode, "ocr"
 
     return "", "none"
 
@@ -320,6 +353,10 @@ def extract_text(uploaded_file, pdf_mode="auto") -> Tuple[str, str]:
             return extract_pdf_first_page_blocks(data), "blocks"
         if pdf_mode == "words":
             return extract_pdf_first_page_words(data), "words"
+        if pdf_mode == "ocr":
+            if not tesseract_available():
+                return "", "ocr-unavailable"
+            return extract_pdf_first_page_ocr(data), "ocr"
         best_text, best_mode = extract_pdf_first_page_best(data)
         return best_text, best_mode
 
@@ -525,10 +562,13 @@ def render_extraction_summary(data: Dict):
 
 pdf_mode = st.radio(
     "Modo lectura PDF (solo página 1)",
-    ["auto", "text", "blocks", "words"],
+    ["auto", "text", "blocks", "words", "ocr"],
     index=0,
     horizontal=True
 )
+
+if not tesseract_available():
+    st.info("OCR no disponible en este entorno. Para usar modo OCR instala tesseract-ocr en el sistema.")
 
 if st.button("🚀 Generar MT700"):
     if not files:
