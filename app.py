@@ -28,15 +28,25 @@ try:
 except Exception:
     pytesseract = None
 
-st.set_page_config(page_title="MT700 Generator v3.1 PDF Page1 OCR", layout="wide")
-st.title("📡 MT700 Generator - Trade Finance v3.1 (PDF página 1 + OCR fallback)")
+st.set_page_config(page_title="MT700 Generator v3.1 EN OCR", layout="wide")
+st.title("📡 MT700 Generator - Trade Finance v3.1 (English MT700 + OCR fallback)")
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 
 GEN_PROMPT = """
 You are a senior Trade Finance officer specialized in documentary credits and SWIFT MT700.
-Return ONLY one final MT700 in SWIFT format, no commentary.
+
+Return ONLY one final MT700 in SWIFT format.
+No commentary. No markdown. No explanations.
+
+CRITICAL LANGUAGE RULE:
+- The final MT700 MUST be written in ENGLISH only.
+- All narrative fields MUST be in English only.
+- Translate any Spanish or other language source content into professional banking English.
+- This applies especially to :40E:, :45A:, :46A:, :47A:, :71D:, :78:, and :72Z:.
+- Do not output Spanish words such as: mercancia, factura, conocimiento, carta de porte, poliza, certificado, segun, beneficiario, solicitante, vencimiento.
+- Use standard documentary credit wording in English.
 
 Mandatory fields:
 :27: :20: :40A: :40E: :31C: :31D: :50: :59: :32B: :39A: :41A: :42C: :43P: :43T:
@@ -47,46 +57,64 @@ Critical rules:
 - :57A: is the advising/routed bank. Never swap :41A: and :57A:.
 - :31D: must include expiry date and expiry place.
 - :44C: latest shipment date.
-- :45A: goods + incoterm + HS code + order reference if available.
-- :46A: exact documentary requirements in banking wording.
-- :78: must contain operational reimbursement/presentation instructions.
+- :45A: must describe goods/services in English, including incoterm + HS code + order reference if available.
+- :46A: must list documentary requirements in clear banking English.
+- :47A: must contain additional conditions in English.
+- :78: must contain operational reimbursement/presentation instructions in English.
+- Use concise professional SWIFT-style English.
 - No placeholders. No explanations. No empty mandatory fields.
 """
 
 CORRECTION_PROMPT = """
 You are a senior Trade Finance SWIFT MT700 repair specialist.
-Repair the MT700 draft using the extracted documents and the validation findings.
+
 Return ONLY the corrected MT700.
+No commentary. No markdown.
+
+CRITICAL LANGUAGE RULE:
+- The final MT700 MUST be in ENGLISH only.
+- Replace any Spanish or mixed-language wording with professional banking English.
+- Keep all SWIFT tags and valid factual content.
+- Narrative fields must be English: :40E:, :45A:, :46A:, :47A:, :71D:, :78:, :72Z:.
 
 Fix strictly:
 - :31D: date + place
 - :41A: / :57A: routing logic
-- :45A: completeness
-- :46A: documentary wording
-- :78: reimbursement/presentation instructions
+- :45A: completeness and English wording
+- :46A: documentary wording in English
+- :47A: additional conditions in English
+- :78: reimbursement/presentation instructions in English
 - remove placeholders
 - preserve correct content
 """
 
 FIELD_FIX_PROMPT = """
 You are a senior Trade Finance SWIFT MT700 field repair specialist.
+
 You will receive:
 1. extracted documents
 2. current MT700
 3. specific defective fields
-Correct ONLY the defective fields while preserving the rest of the MT700.
+
 Return ONLY the full corrected MT700 in SWIFT format.
+
+CRITICAL LANGUAGE RULE:
+- The final MT700 MUST be in ENGLISH only.
+- Any corrected narrative must be professional banking English.
+
+Correct ONLY the defective fields while preserving the rest of the MT700.
 """
 
 EXTRACTION_PROMPT = """
 You are a Trade Finance document extraction engine.
 Extract only factual data from the documents. Use null if missing.
+Keep the facts as found, but normalize obvious OCR noise where possible.
 Return JSON only.
 """
 
 VAL_PROMPT = """
 You are a senior Trade Finance MT700 validator.
-Validate strictly against format and banking logic.
+Validate strictly against format, banking logic, and language quality.
 Return JSON only.
 """
 
@@ -155,12 +183,14 @@ VALIDATION_SCHEMA = {
                         "field_46a_complete": {"type": "boolean"},
                         "field_78_complete": {"type": "boolean"},
                         "field_71d_consistent": {"type": "boolean"},
-                        "no_placeholders": {"type": "boolean"}
+                        "no_placeholders": {"type": "boolean"},
+                        "english_only_narratives": {"type": "boolean"}
                     },
                     "required": [
                         "swift_structure", "field_31d_date_place", "field_41a_valid", "field_57a_valid",
                         "field_41a_57a_not_swapped", "field_45a_complete", "field_46a_complete",
-                        "field_78_complete", "field_71d_consistent", "no_placeholders"
+                        "field_78_complete", "field_71d_consistent", "no_placeholders",
+                        "english_only_narratives"
                     ],
                     "additionalProperties": False
                 }
@@ -174,6 +204,13 @@ VALIDATION_SCHEMA = {
 MANDATORY_FIELDS = [
     "27", "20", "40A", "40E", "31C", "31D", "50", "59", "32B", "39A", "41A", "42C",
     "43P", "43T", "44E", "44F", "44C", "45A", "46A", "47A", "48", "49", "57A", "71D", "78", "72Z"
+]
+
+SPANISH_HINT_WORDS = [
+    "factura", "conocimiento", "carta de porte", "poliza", "póliza",
+    "certificado", "segun", "según", "mercancia", "mercancía",
+    "beneficiario", "solicitante", "vencimiento", "ejemplares",
+    "hoja adjunta", "cargador", "consignatario"
 ]
 
 def tesseract_available() -> bool:
@@ -397,6 +434,17 @@ def looks_like_bic(value: str) -> bool:
     value = (value or "").strip().replace(" ", "")
     return bool(re.fullmatch(r"[A-Z0-9]{8}([A-Z0-9]{3})?", value))
 
+def contains_spanish_narrative(text: str) -> bool:
+    t = (text or "").lower()
+    return any(word in t for word in SPANISH_HINT_WORDS)
+
+def english_narratives_ok(fields: Dict[str, str]) -> bool:
+    narrative_tags = ["40E", "45A", "46A", "47A", "71D", "78", "72Z"]
+    for tag in narrative_tags:
+        if contains_spanish_narrative(fields.get(tag, "")):
+            return False
+    return True
+
 def local_validate(mt700: str) -> Dict:
     fields = parse_mt700_fields(mt700)
     issues: List[str] = []
@@ -426,7 +474,7 @@ def local_validate(mt700: str) -> Dict:
         issues.append("Placeholders detected in MT700")
 
     f78 = fields.get("78", "").upper()
-    if f78 and not any(x in f78 for x in ["REIMBURSE", "PRESENT", "DOCUMENT", "COURIER", "CLAIM"]):
+    if f78 and not any(x in f78 for x in ["REIMBURSE", "PRESENT", "DOCUMENT", "COURIER", "CLAIM", "NEGOTIAT"]):
         issues.append(":78: does not look operationally complete")
 
     f45 = fields.get("45A", "").upper()
@@ -436,8 +484,11 @@ def local_validate(mt700: str) -> Dict:
         warnings.append(":45A: does not clearly include incoterm")
 
     f46 = fields.get("46A", "").upper()
-    if f46 and not any(x in f46 for x in ["INVOICE", "BILL OF LADING", "PACKING", "INSURANCE", "CERTIFICATE"]):
+    if f46 and not any(x in f46 for x in ["INVOICE", "BILL OF LADING", "PACKING", "INSURANCE", "CERTIFICATE", "AIR WAYBILL"]):
         issues.append(":46A: does not look like a banking documentary list")
+
+    if not english_narratives_ok(fields):
+        issues.append("Narrative fields are not fully in English")
 
     defective_fields = []
     if ":31D: must include date and place" in issues:
@@ -450,6 +501,8 @@ def local_validate(mt700: str) -> Dict:
         defective_fields.append("46A")
     if any(":78:" in x for x in warnings + issues):
         defective_fields.append("78")
+    if "Narrative fields are not fully in English" in issues:
+        defective_fields.extend(["40E", "45A", "46A", "47A", "71D", "78", "72Z"])
 
     score = 100 - min(50, len(issues) * 8) - min(20, len(warnings) * 3)
     score = max(score, 0)
@@ -470,7 +523,8 @@ def local_validate(mt700: str) -> Dict:
             "field_46a_complete": "46A" not in defective_fields,
             "field_78_complete": "78" not in defective_fields,
             "field_71d_consistent": bool(fields.get("71D", "").strip()),
-            "no_placeholders": not any(x in mt700.upper() for x in ["REFERENCE", "DOCUMENTS REQUIRED", "DATE PLACE", "BANKXXXX"])
+            "no_placeholders": not any(x in mt700.upper() for x in ["REFERENCE", "DOCUMENTS REQUIRED", "DATE PLACE", "BANKXXXX"]),
+            "english_only_narratives": english_narratives_ok(fields)
         }
     }
 
@@ -501,10 +555,12 @@ def calculate_score(mt700: str, validation_obj: Dict) -> int:
     text = (mt700 or "").upper()
     if not mt700.strip():
         return 0
-    if ":78:" in text and "COURIER" in text:
+    if ":78:" in text and any(k in text for k in ["DOCUMENTS", "PRESENTED", "NEGOTIATING", "REIMBURSEMENT"]):
         base += 3
     if ":31D:" in text and re.search(r":31D:\d{6}[A-Z ]+", text):
         base += 3
+    if not contains_spanish_narrative(mt700):
+        base += 4
     return min(max(base, 0), 100)
 
 def build_error_table(validation: Dict) -> List[Dict]:
@@ -581,15 +637,28 @@ if st.button("🚀 Generar MT700"):
             try:
                 raw_text, detected_mode = extract_text(f, pdf_mode=pdf_mode)
                 txt = clean_text(raw_text)
+
                 extracted_docs.append(f"### {f.name}\n{txt}")
-                debug_per_file.append({
+
+                preview_text = txt[:800] if txt else "(vacío)"
+                debug_item = {
                     "file": f.name,
                     "requested_mode": pdf_mode if f.name.lower().endswith(".pdf") else "n/a",
                     "detected_mode": detected_mode,
                     "chars": len(txt),
-                    "preview": txt[:800]
-                })
+                    "preview": preview_text
+                }
+                debug_per_file.append(debug_item)
+
             except Exception as e:
+                debug_per_file.append({
+                    "file": f.name,
+                    "requested_mode": pdf_mode if f.name.lower().endswith(".pdf") else "n/a",
+                    "detected_mode": "error",
+                    "chars": 0,
+                    "preview": "",
+                    "error": str(e)
+                })
                 st.warning(f"Error leyendo {f.name}: {str(e)}")
 
         full_text = "\n\n".join(extracted_docs)
@@ -597,7 +666,7 @@ if st.button("🚀 Generar MT700"):
         st.subheader("🧪 Debug extracción")
         st.json(debug_per_file)
         st.write("**Longitud total extraída:**", len(full_text))
-        st.text_area("Preview texto fuente", full_text[:3000], height=250)
+        st.text_area("Preview texto fuente real enviado al modelo", full_text[:3000], height=250)
 
         try:
             extraction = call_llm_json(EXTRACTION_PROMPT, full_text, EXTRACTION_SCHEMA, max_tokens=1200)
@@ -625,7 +694,7 @@ if st.button("🚀 Generar MT700"):
 
         validation = merge_validation(local_val, llm_val)
 
-        if mt700 and (not validation.get("is_valid", False) or validation.get("score", 0) < 85):
+        if mt700 and (not validation.get("is_valid", False) or validation.get("score", 0) < 90):
             try:
                 repair_input = (
                     "EXTRACTED DOCUMENTS:\n" + full_text[:14000] +
@@ -665,7 +734,11 @@ if "mt700" in st.session_state:
 
     with st.expander("🧪 Debug extracción guardado", expanded=False):
         st.json(st.session_state.get("debug_per_file", []))
-        st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:4000], height=250)
+        st.text_area(
+            "Texto fuente persistido",
+            st.session_state.get("source_text", "")[:4000],
+            height=250
+        )
 
     col1, col2 = st.columns([2, 1])
     with col1:
@@ -674,11 +747,11 @@ if "mt700" in st.session_state:
         st.metric("Confianza", f"{st.session_state['score']}%")
         st.write("**Modo PDF solicitado:**", st.session_state.get("pdf_mode", "auto"))
         if st.session_state["score"] >= 90:
-            st.success("✅ Alto nivel")
+            st.success("✅ High confidence")
         elif st.session_state["score"] >= 70:
-            st.warning("⚠️ Revisar")
+            st.warning("⚠️ Review required")
         else:
-            st.error("❌ No emitir")
+            st.error("❌ Do not issue")
         st.json(st.session_state["validation"])
 
     parsed = parse_mt700_fields(edited_mt700)
@@ -692,14 +765,14 @@ if "mt700" in st.session_state:
     if rows:
         st.dataframe(rows, use_container_width=True)
     else:
-        st.success("Sin errores ni warnings detectados")
+        st.success("No errors or warnings detected")
 
     col_a, col_b = st.columns(2)
     with col_a:
-        if st.button("🛠️ Regenerar solo campos defectuosos"):
+        if st.button("🛠️ Regenerate defective fields only"):
             defective = st.session_state["validation"].get("defective_fields", [])
             if not defective:
-                st.info("No hay campos defectuosos detectados")
+                st.info("No defective fields detected")
             else:
                 try:
                     repair_input = (
@@ -724,11 +797,11 @@ if "mt700" in st.session_state:
                     st.session_state["score"] = calculate_score(fixed, validation_3)
                     st.rerun()
                 except Exception as e:
-                    st.error(f"Fallo regenerando campos defectuosos: {str(e)}")
+                    st.error(f"Error regenerating defective fields: {str(e)}")
 
     with col_b:
-        if st.button("✅ Aprobar"):
-            st.success("MT700 aprobado ✅")
+        if st.button("✅ Approve"):
+            st.success("MT700 approved ✅")
 
     txt_data = edited_mt700.encode("utf-8")
     json_data = json.dumps({
@@ -742,6 +815,6 @@ if "mt700" in st.session_state:
 
     d1, d2 = st.columns(2)
     with d1:
-        st.download_button("⬇️ Descargar MT700 TXT", txt_data, file_name="MT700.txt", mime="text/plain")
+        st.download_button("⬇️ Download MT700 TXT", txt_data, file_name="MT700.txt", mime="text/plain")
     with d2:
-        st.download_button("⬇️ Descargar validación JSON", json_data, file_name="MT700_validation.json", mime="application/json")
+        st.download_button("⬇️ Download validation JSON", json_data, file_name="MT700_validation.json", mime="application/json")
