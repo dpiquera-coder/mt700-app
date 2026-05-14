@@ -6,10 +6,10 @@ import re
 import subprocess
 import tempfile
 import shutil
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, List, Tuple
 
 try:
-    import fitz  # PyMuPDF
+    import fitz
 except Exception:
     fitz = None
 
@@ -28,180 +28,13 @@ try:
 except Exception:
     pytesseract = None
 
-st.set_page_config(page_title="MT700 Generator v3.1 EN OCR", layout="wide")
-st.title("📡 MT700 Generator - Trade Finance v3.1 (English MT700 + OCR fallback)")
+st.set_page_config(page_title="MT700 Generator v5", layout="wide")
+st.title("📡 MT700 Generator - Trade Finance v5 (strict MT700 mapping)")
 
 client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 files = st.file_uploader("Sube documentos", accept_multiple_files=True)
 
-GEN_PROMPT = """
-You are a senior Trade Finance officer specialized in documentary credits and SWIFT MT700.
-
-Return ONLY one final MT700 in SWIFT format.
-No commentary. No markdown. No explanations.
-
-CRITICAL LANGUAGE RULE:
-- The final MT700 MUST be written in ENGLISH only.
-- All narrative fields MUST be in English only.
-- Translate any Spanish or other language source content into professional banking English.
-- This applies especially to :40E:, :45A:, :46A:, :47A:, :71D:, :78:, and :72Z:.
-- Do not output Spanish words such as: mercancia, factura, conocimiento, carta de porte, poliza, certificado, segun, beneficiario, solicitante, vencimiento.
-- Use standard documentary credit wording in English.
-
-Mandatory fields:
-:27: :20: :40A: :40E: :31C: :31D: :50: :59: :32B: :39A: :41A: :42C: :43P: :43T:
-:44E: :44F: :44C: :45A: :46A: :47A: :48: :49: :57A: :71D: :78: :72Z:
-
-Critical rules:
-- :41A: is the bank with which the credit is available.
-- :57A: is the advising/routed bank. Never swap :41A: and :57A:.
-- :31D: must include expiry date and expiry place.
-- :44C: latest shipment date.
-- :45A: must describe goods/services in English, including incoterm + HS code + order reference if available.
-- :46A: must list documentary requirements in clear banking English.
-- :47A: must contain additional conditions in English.
-- :78: must contain operational reimbursement/presentation instructions in English.
-- Use concise professional SWIFT-style English.
-- No placeholders. No explanations. No empty mandatory fields.
-"""
-
-CORRECTION_PROMPT = """
-You are a senior Trade Finance SWIFT MT700 repair specialist.
-
-Return ONLY the corrected MT700.
-No commentary. No markdown.
-
-CRITICAL LANGUAGE RULE:
-- The final MT700 MUST be in ENGLISH only.
-- Replace any Spanish or mixed-language wording with professional banking English.
-- Keep all SWIFT tags and valid factual content.
-- Narrative fields must be English: :40E:, :45A:, :46A:, :47A:, :71D:, :78:, :72Z:.
-
-Fix strictly:
-- :31D: date + place
-- :41A: / :57A: routing logic
-- :45A: completeness and English wording
-- :46A: documentary wording in English
-- :47A: additional conditions in English
-- :78: reimbursement/presentation instructions in English
-- remove placeholders
-- preserve correct content
-"""
-
-FIELD_FIX_PROMPT = """
-You are a senior Trade Finance SWIFT MT700 field repair specialist.
-
-You will receive:
-1. extracted documents
-2. current MT700
-3. specific defective fields
-
-Return ONLY the full corrected MT700 in SWIFT format.
-
-CRITICAL LANGUAGE RULE:
-- The final MT700 MUST be in ENGLISH only.
-- Any corrected narrative must be professional banking English.
-
-Correct ONLY the defective fields while preserving the rest of the MT700.
-"""
-
-EXTRACTION_PROMPT = """
-You are a Trade Finance document extraction engine.
-Extract only factual data from the documents. Use null if missing.
-Keep the facts as found, but normalize obvious OCR noise where possible.
-Return JSON only.
-"""
-
-VAL_PROMPT = """
-You are a senior Trade Finance MT700 validator.
-Validate strictly against format, banking logic, and language quality.
-Return JSON only.
-"""
-
-EXTRACTION_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "trade_extraction",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "applicant": {"type": ["string", "null"]},
-                "beneficiary": {"type": ["string", "null"]},
-                "currency": {"type": ["string", "null"]},
-                "amount": {"type": ["string", "null"]},
-                "issue_date": {"type": ["string", "null"]},
-                "expiry_date": {"type": ["string", "null"]},
-                "expiry_place": {"type": ["string", "null"]},
-                "available_with_bank": {"type": ["string", "null"]},
-                "advising_bank": {"type": ["string", "null"]},
-                "latest_shipment_date": {"type": ["string", "null"]},
-                "port_of_loading": {"type": ["string", "null"]},
-                "port_of_destination": {"type": ["string", "null"]},
-                "incoterm": {"type": ["string", "null"]},
-                "goods_description": {"type": ["string", "null"]},
-                "hs_code": {"type": ["string", "null"]},
-                "order_reference": {"type": ["string", "null"]},
-                "documents_required": {"type": "array", "items": {"type": "string"}},
-                "special_conditions": {"type": "array", "items": {"type": "string"}},
-                "charges": {"type": ["string", "null"]},
-                "reimbursement_instructions": {"type": ["string", "null"]}
-            },
-            "required": [
-                "applicant", "beneficiary", "currency", "amount", "issue_date", "expiry_date",
-                "expiry_place", "available_with_bank", "advising_bank", "latest_shipment_date",
-                "port_of_loading", "port_of_destination", "incoterm", "goods_description",
-                "hs_code", "order_reference", "documents_required", "special_conditions",
-                "charges", "reimbursement_instructions"
-            ],
-            "additionalProperties": False
-        }
-    }
-}
-
-VALIDATION_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "mt700_validation",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "is_valid": {"type": "boolean"},
-                "score": {"type": "integer"},
-                "issues": {"type": "array", "items": {"type": "string"}},
-                "warnings": {"type": "array", "items": {"type": "string"}},
-                "field_checks": {
-                    "type": "object",
-                    "properties": {
-                        "swift_structure": {"type": "boolean"},
-                        "field_31d_date_place": {"type": "boolean"},
-                        "field_41a_valid": {"type": "boolean"},
-                        "field_57a_valid": {"type": "boolean"},
-                        "field_41a_57a_not_swapped": {"type": "boolean"},
-                        "field_45a_complete": {"type": "boolean"},
-                        "field_46a_complete": {"type": "boolean"},
-                        "field_78_complete": {"type": "boolean"},
-                        "field_71d_consistent": {"type": "boolean"},
-                        "no_placeholders": {"type": "boolean"},
-                        "english_only_narratives": {"type": "boolean"}
-                    },
-                    "required": [
-                        "swift_structure", "field_31d_date_place", "field_41a_valid", "field_57a_valid",
-                        "field_41a_57a_not_swapped", "field_45a_complete", "field_46a_complete",
-                        "field_78_complete", "field_71d_consistent", "no_placeholders",
-                        "english_only_narratives"
-                    ],
-                    "additionalProperties": False
-                }
-            },
-            "required": ["is_valid", "score", "issues", "warnings", "field_checks"],
-            "additionalProperties": False
-        }
-    }
-}
-
-MANDATORY_FIELDS = [
+ALLOWED_TAGS = [
     "27", "20", "40A", "40E", "31C", "31D", "50", "59", "32B", "39A", "41A", "42C",
     "43P", "43T", "44E", "44F", "44C", "45A", "46A", "47A", "48", "49", "57A", "71D", "78", "72Z"
 ]
@@ -212,6 +45,128 @@ SPANISH_HINT_WORDS = [
     "beneficiario", "solicitante", "vencimiento", "ejemplares",
     "hoja adjunta", "cargador", "consignatario"
 ]
+
+EXPECTED_GUIDE = """
+Expected MT700 style guide:
+
+- :27: sequence, e.g. 1/1
+- :20: documentary credit number / LC reference
+- :40A: form of documentary credit, e.g. IRREVOCABLE
+- :40E: applicable rules, e.g. UCP LATEST VERSION
+- :31C: issue date in YYMMDD
+- :31D: expiry date in YYMMDD immediately followed by expiry place, e.g. 260621HONG KONG
+- :50: applicant name and address
+- :59: beneficiary name and address
+- :32B: currency + amount only, e.g. USD33998,64
+- :39A: tolerance only, e.g. 10/10
+- :41A: available with bank BIC + method, e.g. BSCHHKHHXXXX / BY PAYMENT
+- :42C: drafts at...
+- :43P: ALLOWED / NOT ALLOWED
+- :43T: ALLOWED / NOT ALLOWED
+- :44E: port of loading / place of receipt
+- :44F: port of discharge / final destination
+- :44C: latest shipment date in YYMMDD
+- :45A: goods description in English
+- :46A: documents required in English
+- :47A: additional conditions in English
+- :48: presentation period, e.g. 21/AFTER SHIPMENT DATE
+- :49: confirmation instructions, e.g. WITHOUT
+- :57A: advising / routed bank BIC
+- :71D: charges clause in English
+- :78: instructions to paying / negotiating bank in English
+- :72Z: sender to receiver information in English
+
+Hard prohibitions:
+- Do NOT output :41B:, :41C:, :41D:
+- Do NOT place names/addresses in :32B:
+- Do NOT place amounts in :50:, :59:, :71D:, :72Z:, :48:, :49:
+- Do NOT place beneficiary name in :40A:
+- Do NOT place addresses in :40E:
+"""
+
+STRUCTURED_EXTRACTION_PROMPT = """
+You are a senior Trade Finance data extraction engine.
+
+Extract factual values from the provided documents into the target MT700 field map.
+Return JSON only.
+
+Rules:
+- Use null if not found.
+- Preserve factual values, references, bank names, BICs, addresses, dates, ports, amounts.
+- Convert narrative wording to concise English where needed.
+- Do not guess a value if unsupported.
+- Do not invent SWIFT tags outside the requested schema.
+- Use the expected MT700 style guide supplied by the user.
+
+Field meaning constraints:
+- field_20 = LC reference / documentary credit number
+- field_40A = IRREVOCABLE / REVOCABLE style form only
+- field_40E = applicable rules only
+- field_32B = currency+amount only
+- field_39A = tolerance only
+- field_48 = presentation period only
+- field_49 = confirmation instruction only
+- field_71D = charges clause only
+"""
+
+GENERATION_PROMPT = """
+You are a senior Trade Finance officer specialized in SWIFT MT700.
+
+Generate one final MT700 in SWIFT format from the structured field map.
+Return ONLY the MT700. No commentary. No markdown.
+
+Use the style guide exactly.
+Respect the semantic type of each field.
+Do not output any disallowed tags.
+Narrative fields must be in English.
+"""
+
+SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "mt700_field_map",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "field_27": {"type": ["string", "null"]},
+                "field_20": {"type": ["string", "null"]},
+                "field_40A": {"type": ["string", "null"]},
+                "field_40E": {"type": ["string", "null"]},
+                "field_31C": {"type": ["string", "null"]},
+                "field_31D": {"type": ["string", "null"]},
+                "field_50": {"type": ["string", "null"]},
+                "field_59": {"type": ["string", "null"]},
+                "field_32B": {"type": ["string", "null"]},
+                "field_39A": {"type": ["string", "null"]},
+                "field_41A": {"type": ["string", "null"]},
+                "field_42C": {"type": ["string", "null"]},
+                "field_43P": {"type": ["string", "null"]},
+                "field_43T": {"type": ["string", "null"]},
+                "field_44E": {"type": ["string", "null"]},
+                "field_44F": {"type": ["string", "null"]},
+                "field_44C": {"type": ["string", "null"]},
+                "field_45A": {"type": ["string", "null"]},
+                "field_46A": {"type": ["string", "null"]},
+                "field_47A": {"type": ["string", "null"]},
+                "field_48": {"type": ["string", "null"]},
+                "field_49": {"type": ["string", "null"]},
+                "field_57A": {"type": ["string", "null"]},
+                "field_71D": {"type": ["string", "null"]},
+                "field_78": {"type": ["string", "null"]},
+                "field_72Z": {"type": ["string", "null"]}
+            },
+            "required": [
+                "field_27", "field_20", "field_40A", "field_40E", "field_31C", "field_31D",
+                "field_50", "field_59", "field_32B", "field_39A", "field_41A", "field_42C",
+                "field_43P", "field_43T", "field_44E", "field_44F", "field_44C", "field_45A",
+                "field_46A", "field_47A", "field_48", "field_49", "field_57A", "field_71D",
+                "field_78", "field_72Z"
+            ],
+            "additionalProperties": False
+        }
+    }
+}
 
 def tesseract_available() -> bool:
     return shutil.which("tesseract") is not None and pytesseract is not None and Image is not None
@@ -228,7 +183,33 @@ def safe_json_load(text: str) -> Dict:
                 pass
     return {}
 
-def call_llm_text(system_prompt: str, user_text: str, max_tokens: int = 1800) -> str:
+def call_llm_json(system_prompt: str, user_text: str, schema: Dict, max_tokens: int = 1600) -> Dict:
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_text}
+            ],
+            response_format=schema,
+            max_tokens=max_tokens,
+            temperature=0.05
+        )
+        return safe_json_load(response.choices[0].message.content or "{}")
+    except Exception:
+        response = client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[
+                {"role": "system", "content": system_prompt + "\nReturn only valid JSON."},
+                {"role": "user", "content": user_text}
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=max_tokens,
+            temperature=0.05
+        )
+        return safe_json_load(response.choices[0].message.content or "{}")
+
+def call_llm_text(system_prompt: str, user_text: str, max_tokens: int = 2200) -> str:
     response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[
@@ -236,52 +217,16 @@ def call_llm_text(system_prompt: str, user_text: str, max_tokens: int = 1800) ->
             {"role": "user", "content": user_text}
         ],
         max_tokens=max_tokens,
-        temperature=0.1
+        temperature=0.05
     )
     return response.choices[0].message.content or ""
 
-def call_llm_json(system_prompt: str, user_text: str, schema: Dict = None, max_tokens: int = 1200) -> Dict:
-    try:
-        if schema:
-            response = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_text}
-                ],
-                response_format=schema,
-                max_tokens=max_tokens,
-                temperature=0.1
-            )
-            return safe_json_load(response.choices[0].message.content or "{}")
-    except Exception:
-        pass
-
-    try:
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {"role": "system", "content": system_prompt + "\nReturn ONLY valid JSON."},
-                {"role": "user", "content": user_text}
-            ],
-            response_format={"type": "json_object"},
-            max_tokens=max_tokens,
-            temperature=0.1
-        )
-        return safe_json_load(response.choices[0].message.content or "{}")
-    except Exception:
-        pass
-
-    response = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        messages=[
-            {"role": "system", "content": system_prompt + "\nReturn ONLY valid JSON. No markdown. No explanation."},
-            {"role": "user", "content": user_text}
-        ],
-        max_tokens=max_tokens,
-        temperature=0.1
-    )
-    return safe_json_load(response.choices[0].message.content or "{}")
+def clean_text(text: str) -> str:
+    text = text.replace("\xa0", " ")
+    text = "".join(c for c in text if c.isprintable() or c in "\n\t")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text[:50000].strip()
 
 def extract_doc_legacy(data: bytes) -> str:
     try:
@@ -295,526 +240,247 @@ def extract_doc_legacy(data: bytes) -> str:
         pass
     return ""
 
-def extract_pdf_first_page_text(data: bytes) -> str:
-    if not fitz:
-        return ""
-    try:
-        doc = fitz.open(stream=data, filetype="pdf")
-        if doc.page_count == 0:
-            return ""
-        page = doc[0]
-        text = page.get_text("text", sort=True) or ""
-        return text.strip()
-    except Exception:
-        return ""
-
-def extract_pdf_first_page_blocks(data: bytes) -> str:
-    if not fitz:
-        return ""
-    try:
-        doc = fitz.open(stream=data, filetype="pdf")
-        if doc.page_count == 0:
-            return ""
-        page = doc[0]
-        blocks = page.get_text("blocks")
-        if not blocks:
-            return ""
-        blocks = sorted(blocks, key=lambda b: (b[1], b[0]))
-        lines = []
-        for block in blocks:
-            txt = str(block[4]).strip()
-            if txt:
-                lines.append(txt)
-        return "\n".join(lines).strip()
-    except Exception:
-        return ""
-
-def extract_pdf_first_page_words(data: bytes) -> str:
-    if not fitz:
-        return ""
-    try:
-        doc = fitz.open(stream=data, filetype="pdf")
-        if doc.page_count == 0:
-            return ""
-        page = doc[0]
-        words = page.get_text("words")
-        if not words:
-            return ""
-        words = sorted(words, key=lambda w: (w[1], w[0]))
-        return " ".join(str(w[4]).strip() for w in words if str(w[4]).strip()).strip()
-    except Exception:
-        return ""
-
-def extract_pdf_first_page_ocr(data: bytes) -> str:
+def extract_pdf_ocr_all_pages(data: bytes) -> str:
     if not fitz or not tesseract_available():
         return ""
     try:
         doc = fitz.open(stream=data, filetype="pdf")
-        if doc.page_count == 0:
-            return ""
-        page = doc[0]
-        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        text = pytesseract.image_to_string(img, lang="spa+eng")
-        return text.strip()
+        out = []
+        for i in range(doc.page_count):
+            page = doc[i]
+            pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            txt = pytesseract.image_to_string(img, lang="spa+eng")
+            out.append(f"==PAGE {i+1}==\n{txt}")
+        return "\n\n".join(out)
     except Exception:
         return ""
 
-def extract_pdf_first_page_best(data: bytes) -> Tuple[str, str]:
-    text_mode = extract_pdf_first_page_text(data)
-    if len(text_mode.strip()) > 80:
-        return text_mode, "text"
+def normalize_field_map(data: Dict) -> Dict:
+    if not data:
+        return {}
 
-    blocks_mode = extract_pdf_first_page_blocks(data)
-    if len(blocks_mode.strip()) > 80:
-        return blocks_mode, "blocks"
+    if not data.get("field_27"):
+        data["field_27"] = "1/1"
 
-    words_mode = extract_pdf_first_page_words(data)
-    if len(words_mode.strip()) > 80:
-        return words_mode, "words"
+    if data.get("field_40A"):
+        val = data["field_40A"].upper()
+        if "IRREV" in val:
+            data["field_40A"] = "IRREVOCABLE"
 
-    ocr_mode = extract_pdf_first_page_ocr(data)
-    if len(ocr_mode.strip()) > 80:
-        return ocr_mode, "ocr"
+    if data.get("field_40E"):
+        if "UCP" in data["field_40E"].upper():
+            data["field_40E"] = "UCP LATEST VERSION"
 
-    return "", "none"
+    if data.get("field_32B"):
+        v = data["field_32B"].replace(" ", "")
+        v = re.sub(r"^(USD|EUR|GBP)\s*([0-9].*)$", r"\1\2", v)
+        data["field_32B"] = v
 
-def extract_text(uploaded_file, pdf_mode="auto") -> Tuple[str, str]:
-    name = uploaded_file.name.lower()
-    data = uploaded_file.getvalue()
+    if data.get("field_43P"):
+        v = data["field_43P"].upper()
+        if "ALLOW" in v:
+            data["field_43P"] = "ALLOWED"
+        elif "NOT" in v:
+            data["field_43P"] = "NOT ALLOWED"
 
-    if name.endswith(".pdf"):
-        if pdf_mode == "text":
-            return extract_pdf_first_page_text(data), "text"
-        if pdf_mode == "blocks":
-            return extract_pdf_first_page_blocks(data), "blocks"
-        if pdf_mode == "words":
-            return extract_pdf_first_page_words(data), "words"
-        if pdf_mode == "ocr":
-            if not tesseract_available():
-                return "", "ocr-unavailable"
-            return extract_pdf_first_page_ocr(data), "ocr"
-        best_text, best_mode = extract_pdf_first_page_best(data)
-        return best_text, best_mode
+    if data.get("field_43T"):
+        v = data["field_43T"].upper()
+        if "ALLOW" in v:
+            data["field_43T"] = "ALLOWED"
+        elif "NOT" in v:
+            data["field_43T"] = "NOT ALLOWED"
 
-    if name.endswith(".docx"):
-        if docx:
-            try:
-                d = docx.Document(BytesIO(data))
-                return "\n".join(p.text for p in d.paragraphs), "docx"
-            except Exception:
-                return "", "docx-error"
-        return "", "docx-missing-lib"
+    return data
 
-    if name.endswith(".doc"):
-        return extract_doc_legacy(data), "doc-antiword"
-
-    try:
-        return data.decode("utf-8", errors="ignore"), "text-file"
-    except Exception:
-        return "", "unknown"
-
-def clean_text(text: str) -> str:
-    text = text.replace("\xa0", " ")
-    text = "".join(c for c in text if c.isprintable() or c in "\n\t")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text[:22000].strip()
+def build_mt700_from_map(m: Dict) -> str:
+    lines = [
+        "{1:F01BSCHESMMXXXX0123000001}{2:I700BSCHHKHHXXXXN2020}{4:"
+    ]
+    mapping = {
+        "27": "field_27", "20": "field_20", "40A": "field_40A", "40E": "field_40E",
+        "31C": "field_31C", "31D": "field_31D", "50": "field_50", "59": "field_59",
+        "32B": "field_32B", "39A": "field_39A", "41A": "field_41A", "42C": "field_42C",
+        "43P": "field_43P", "43T": "field_43T", "44E": "field_44E", "44F": "field_44F",
+        "44C": "field_44C", "45A": "field_45A", "46A": "field_46A", "47A": "field_47A",
+        "48": "field_48", "49": "field_49", "57A": "field_57A", "71D": "field_71D",
+        "78": "field_78", "72Z": "field_72Z"
+    }
+    for tag in ALLOWED_TAGS:
+        key = mapping[tag]
+        value = (m.get(key) or "").strip()
+        if value:
+            lines.append(f":{tag}:{value}")
+    lines.append("-}")
+    return "\n".join(lines)
 
 def parse_mt700_fields(mt700: str) -> Dict[str, str]:
-    if not mt700:
-        return {}
     pattern = re.compile(r"(?ms)^:([0-9]{2}[A-Z]?):(.*?)(?=^:[0-9]{2}[A-Z]?:|^-}\s*$|\Z)")
-    return {tag: value.strip() for tag, value in pattern.findall(mt700)}
-
-def has_swift_blocks(mt700: str) -> bool:
-    return ("{1:" in mt700) and ("{2:" in mt700) and ("{4:" in mt700) and ("-}" in mt700)
-
-def looks_like_bic(value: str) -> bool:
-    value = (value or "").strip().replace(" ", "")
-    return bool(re.fullmatch(r"[A-Z0-9]{8}([A-Z0-9]{3})?", value))
+    return {tag: value.strip() for tag, value in pattern.findall(mt700 or "")}
 
 def contains_spanish_narrative(text: str) -> bool:
     t = (text or "").lower()
     return any(word in t for word in SPANISH_HINT_WORDS)
 
-def english_narratives_ok(fields: Dict[str, str]) -> bool:
-    narrative_tags = ["40E", "45A", "46A", "47A", "71D", "78", "72Z"]
-    for tag in narrative_tags:
-        if contains_spanish_narrative(fields.get(tag, "")):
-            return False
-    return True
-
-def local_validate(mt700: str) -> Dict:
+def validate_mt700(mt700: str) -> Dict:
     fields = parse_mt700_fields(mt700)
-    issues: List[str] = []
-    warnings: List[str] = []
+    issues, warnings = [], []
 
-    for f in MANDATORY_FIELDS:
-        if f not in fields or not fields[f].strip():
-            issues.append(f"Missing or empty field :{f}:")
+    for tag in ALLOWED_TAGS:
+        if tag not in fields or not fields[tag].strip():
+            issues.append(f"Missing or empty field :{tag}:")
 
-    if not has_swift_blocks(mt700):
-        issues.append("Invalid SWIFT block structure")
+    forbidden = re.findall(r"^:([0-9]{2}[A-Z]?):", mt700 or "", re.M)
+    for tag in forbidden:
+        if tag not in ALLOWED_TAGS:
+            issues.append(f"Forbidden tag detected :{tag}:")
 
-    d31d = fields.get("31D", "")
-    if not re.search(r"\d{6}", d31d) or len(d31d.strip()) <= 6:
-        issues.append(":31D: must include date and place")
+    if "32B" in fields and not re.match(r"^[A-Z]{3}[0-9,\.]+$", fields["32B"].replace(" ", "")):
+        issues.append(":32B: must contain currency and amount only")
 
-    if fields.get("41A") and not looks_like_bic(fields.get("41A", "").splitlines()[0]):
-        issues.append(":41A: does not appear to contain a valid BIC")
+    if "40A" in fields and fields["40A"].upper() not in ["IRREVOCABLE", "REVOCABLE"]:
+        issues.append(":40A: must be form of documentary credit only")
 
-    if fields.get("57A") and not looks_like_bic(fields.get("57A", "").splitlines()[0]):
-        warnings.append(":57A: first line does not appear to be a pure BIC")
+    if "40E" in fields and len(fields["40E"]) > 80 and "," in fields["40E"]:
+        issues.append(":40E: appears to contain address-like content")
 
-    if fields.get("41A", "").splitlines()[:1] == fields.get("57A", "").splitlines()[:1] and fields.get("41A") and fields.get("57A"):
-        warnings.append(":41A: and :57A: are identical, review routing logic")
+    if "48" in fields and "%" in fields["48"]:
+        issues.append(":48: cannot contain percentage value")
 
-    if any(x in mt700.upper() for x in ["REFERENCE", "DOCUMENTS REQUIRED", "DATE PLACE", "BANKXXXX"]):
-        issues.append("Placeholders detected in MT700")
+    if "49" in fields and "%" in fields["49"]:
+        issues.append(":49: cannot contain percentage value")
 
-    f78 = fields.get("78", "").upper()
-    if f78 and not any(x in f78 for x in ["REIMBURSE", "PRESENT", "DOCUMENT", "COURIER", "CLAIM", "NEGOTIAT"]):
-        issues.append(":78: does not look operationally complete")
+    if "71D" in fields and re.fullmatch(r"[0-9,\.]+", fields["71D"].strip()):
+        issues.append(":71D: cannot be numeric only")
 
-    f45 = fields.get("45A", "").upper()
-    if f45 and "HS" not in f45:
-        warnings.append(":45A: does not clearly include HS code")
-    if f45 and "INCOTERM" not in f45 and not any(x in f45 for x in ["CIF", "FOB", "CFR", "EXW", "FCA", "DAP", "DDP", "CIP", "CPT"]):
-        warnings.append(":45A: does not clearly include incoterm")
+    if "50" in fields and re.fullmatch(r"[0-9,\.]+", fields["50"].strip()):
+        issues.append(":50: cannot be numeric only")
 
-    f46 = fields.get("46A", "").upper()
-    if f46 and not any(x in f46 for x in ["INVOICE", "BILL OF LADING", "PACKING", "INSURANCE", "CERTIFICATE", "AIR WAYBILL"]):
-        issues.append(":46A: does not look like a banking documentary list")
+    if "59" in fields and re.fullmatch(r"[0-9,\.]+", fields["59"].strip()):
+        issues.append(":59: cannot be numeric only")
 
-    if not english_narratives_ok(fields):
-        issues.append("Narrative fields are not fully in English")
+    for tag in ["45A", "46A", "47A", "71D", "78", "72Z"]:
+        if tag in fields and contains_spanish_narrative(fields[tag]):
+            warnings.append(f":{tag}: contains non-English wording")
+
+    score = 100 - min(70, len(issues) * 8) - min(20, len(warnings) * 3)
+    score = max(score, 0)
 
     defective_fields = []
-    if ":31D: must include date and place" in issues:
-        defective_fields.append("31D")
-    if ":41A: does not appear to contain a valid BIC" in issues or ":41A: and :57A: are identical, review routing logic" in warnings:
-        defective_fields.extend(["41A", "57A"])
-    if any(":45A:" in x for x in warnings + issues):
-        defective_fields.append("45A")
-    if any(":46A:" in x for x in warnings + issues):
-        defective_fields.append("46A")
-    if any(":78:" in x for x in warnings + issues):
-        defective_fields.append("78")
-    if "Narrative fields are not fully in English" in issues:
-        defective_fields.extend(["40E", "45A", "46A", "47A", "71D", "78", "72Z"])
-
-    score = 100 - min(50, len(issues) * 8) - min(20, len(warnings) * 3)
-    score = max(score, 0)
+    for x in issues + warnings:
+        defective_fields.extend(re.findall(r":([0-9]{2}[A-Z]?):", x))
 
     return {
         "is_valid": len(issues) == 0,
         "score": score,
         "issues": issues,
         "warnings": warnings,
-        "defective_fields": sorted(list(set(defective_fields))),
-        "field_checks": {
-            "swift_structure": has_swift_blocks(mt700),
-            "field_31d_date_place": "31D" not in defective_fields,
-            "field_41a_valid": looks_like_bic(fields.get("41A", "").splitlines()[0]) if fields.get("41A") else False,
-            "field_57a_valid": bool(fields.get("57A", "").strip()),
-            "field_41a_57a_not_swapped": not (fields.get("41A", "").splitlines()[:1] == fields.get("57A", "").splitlines()[:1] and fields.get("41A") and fields.get("57A")),
-            "field_45a_complete": "45A" not in defective_fields,
-            "field_46a_complete": "46A" not in defective_fields,
-            "field_78_complete": "78" not in defective_fields,
-            "field_71d_consistent": bool(fields.get("71D", "").strip()),
-            "no_placeholders": not any(x in mt700.upper() for x in ["REFERENCE", "DOCUMENTS REQUIRED", "DATE PLACE", "BANKXXXX"]),
-            "english_only_narratives": english_narratives_ok(fields)
-        }
+        "defective_fields": sorted(set(defective_fields))
     }
-
-def merge_validation(local_val: Dict, llm_val: Optional[Dict]) -> Dict:
-    if not llm_val:
-        return local_val
-    issues = list(dict.fromkeys(local_val.get("issues", []) + llm_val.get("issues", [])))
-    warnings = list(dict.fromkeys(local_val.get("warnings", []) + llm_val.get("warnings", [])))
-    field_checks = local_val.get("field_checks", {}).copy()
-    field_checks.update(llm_val.get("field_checks", {}))
-    score = min(local_val.get("score", 0), llm_val.get("score", 0))
-    defective_fields = list(local_val.get("defective_fields", []))
-    for issue in issues + warnings:
-        m = re.findall(r":([0-9]{2}[A-Z]?):", issue)
-        defective_fields.extend(m)
-    defective_fields = sorted(list(set(defective_fields)))
-    return {
-        "is_valid": local_val.get("is_valid", False) and llm_val.get("is_valid", False),
-        "score": score,
-        "issues": issues,
-        "warnings": warnings,
-        "defective_fields": defective_fields,
-        "field_checks": field_checks
-    }
-
-def calculate_score(mt700: str, validation_obj: Dict) -> int:
-    base = validation_obj.get("score", 0)
-    text = (mt700 or "").upper()
-    if not mt700.strip():
-        return 0
-    if ":78:" in text and any(k in text for k in ["DOCUMENTS", "PRESENTED", "NEGOTIATING", "REIMBURSEMENT"]):
-        base += 3
-    if ":31D:" in text and re.search(r":31D:\d{6}[A-Z ]+", text):
-        base += 3
-    if not contains_spanish_narrative(mt700):
-        base += 4
-    return min(max(base, 0), 100)
-
-def build_error_table(validation: Dict) -> List[Dict]:
-    rows = []
-    for issue in validation.get("issues", []):
-        fields = re.findall(r":([0-9]{2}[A-Z]?):", issue)
-        rows.append({"type": "ERROR", "field": ", ".join(fields) if fields else "-", "message": issue})
-    for warning in validation.get("warnings", []):
-        fields = re.findall(r":([0-9]{2}[A-Z]?):", warning)
-        rows.append({"type": "WARNING", "field": ", ".join(fields) if fields else "-", "message": warning})
-    return rows
-
-def default_extraction() -> Dict:
-    return {
-        "applicant": None,
-        "beneficiary": None,
-        "currency": None,
-        "amount": None,
-        "issue_date": None,
-        "expiry_date": None,
-        "expiry_place": None,
-        "available_with_bank": None,
-        "advising_bank": None,
-        "latest_shipment_date": None,
-        "port_of_loading": None,
-        "port_of_destination": None,
-        "incoterm": None,
-        "goods_description": None,
-        "hs_code": None,
-        "order_reference": None,
-        "documents_required": [],
-        "special_conditions": [],
-        "charges": None,
-        "reimbursement_instructions": None
-    }
-
-def render_extraction_summary(data: Dict):
-    st.subheader("📌 Datos extraídos")
-    col1, col2 = st.columns(2)
-    with col1:
-        st.write("**Applicant:**", data.get("applicant"))
-        st.write("**Beneficiary:**", data.get("beneficiary"))
-        st.write("**Currency / Amount:**", f"{data.get('currency')} {data.get('amount')}")
-        st.write("**Issue date:**", data.get("issue_date"))
-        st.write("**Expiry:**", f"{data.get('expiry_date')} / {data.get('expiry_place')}")
-        st.write("**Available with bank:**", data.get("available_with_bank"))
-        st.write("**Advising bank:**", data.get("advising_bank"))
-    with col2:
-        st.write("**Latest shipment date:**", data.get("latest_shipment_date"))
-        st.write("**Port of loading:**", data.get("port_of_loading"))
-        st.write("**Port of destination:**", data.get("port_of_destination"))
-        st.write("**Incoterm:**", data.get("incoterm"))
-        st.write("**HS code:**", data.get("hs_code"))
-        st.write("**Order ref:**", data.get("order_reference"))
-
-pdf_mode = st.radio(
-    "Modo lectura PDF (solo página 1)",
-    ["auto", "text", "blocks", "words", "ocr"],
-    index=0,
-    horizontal=True
-)
 
 if not tesseract_available():
-    st.info("OCR no disponible en este entorno. Para usar modo OCR instala tesseract-ocr en el sistema.")
+    st.info("OCR no disponible en este entorno. Instala tesseract-ocr y tesseract-ocr-spa para PDF escaneados.")
 
 if st.button("🚀 Generar MT700"):
     if not files:
         st.warning("Sube documentos")
     else:
-        extracted_docs = []
-        debug_per_file = []
+        full_parts = []
+        debug = []
 
         for f in files:
-            try:
-                raw_text, detected_mode = extract_text(f, pdf_mode=pdf_mode)
-                txt = clean_text(raw_text)
+            name = f.name.lower()
+            data = f.getvalue()
+            txt = ""
 
-                extracted_docs.append(f"### {f.name}\n{txt}")
+            if name.endswith(".pdf"):
+                txt = extract_pdf_ocr_all_pages(data)
+                mode = "ocr-all-pages"
+            elif name.endswith(".docx"):
+                try:
+                    d = docx.Document(BytesIO(data))
+                    txt = "\n".join(p.text for p in d.paragraphs)
+                    mode = "docx"
+                except Exception:
+                    txt = ""
+                    mode = "docx-error"
+            elif name.endswith(".doc"):
+                txt = extract_doc_legacy(data)
+                mode = "doc"
+            else:
+                try:
+                    txt = data.decode("utf-8", errors="ignore")
+                    mode = "text"
+                except Exception:
+                    txt = ""
+                    mode = "unknown"
 
-                preview_text = txt[:800] if txt else "(vacío)"
-                debug_item = {
-                    "file": f.name,
-                    "requested_mode": pdf_mode if f.name.lower().endswith(".pdf") else "n/a",
-                    "detected_mode": detected_mode,
-                    "chars": len(txt),
-                    "preview": preview_text
-                }
-                debug_per_file.append(debug_item)
+            txt = clean_text(txt)
+            full_parts.append(f"### {f.name}\n{txt}")
+            debug.append({
+                "file": f.name,
+                "mode": mode,
+                "chars": len(txt),
+                "preview": txt[:800]
+            })
 
-            except Exception as e:
-                debug_per_file.append({
-                    "file": f.name,
-                    "requested_mode": pdf_mode if f.name.lower().endswith(".pdf") else "n/a",
-                    "detected_mode": "error",
-                    "chars": 0,
-                    "preview": "",
-                    "error": str(e)
-                })
-                st.warning(f"Error leyendo {f.name}: {str(e)}")
-
-        full_text = "\n\n".join(extracted_docs)
+        source_text = "\n\n".join(full_parts)
 
         st.subheader("🧪 Debug extracción")
-        st.json(debug_per_file)
-        st.write("**Longitud total extraída:**", len(full_text))
-        st.text_area("Preview texto fuente real enviado al modelo", full_text[:3000], height=250)
+        st.json(debug)
+        st.text_area("Texto fuente", source_text[:5000], height=300)
 
-        try:
-            extraction = call_llm_json(EXTRACTION_PROMPT, full_text, EXTRACTION_SCHEMA, max_tokens=1200)
-            if not extraction:
-                extraction = default_extraction()
-        except Exception as e:
-            extraction = default_extraction()
-            st.warning(f"Fallo en extracción estructurada: {str(e)}")
+        user_payload = (
+            EXPECTED_GUIDE +
+            "\n\nSOURCE DOCUMENTS:\n" + source_text[:30000]
+        )
 
-        try:
-            mt700 = call_llm_text(GEN_PROMPT, full_text, max_tokens=1800)
-        except Exception as e:
-            mt700 = ""
-            st.error(f"Fallo generando MT700: {str(e)}")
+        field_map = call_llm_json(STRUCTURED_EXTRACTION_PROMPT, user_payload, SCHEMA, max_tokens=1600)
+        field_map = normalize_field_map(field_map)
 
-        local_val = local_validate(mt700)
+        st.subheader("🧩 Field map estructurado")
+        st.json(field_map)
 
-        llm_val = None
-        try:
-            llm_val = call_llm_json(VAL_PROMPT, mt700, VALIDATION_SCHEMA, max_tokens=1000)
-            if not llm_val:
-                llm_val = None
-        except Exception as e:
-            st.warning(f"Fallo en validación LLM, se usa solo validación local: {str(e)}")
+        seed_mt700 = build_mt700_from_map(field_map)
+        mt700 = call_llm_text(
+            GENERATION_PROMPT,
+            EXPECTED_GUIDE + "\n\nSTRUCTURED FIELD MAP:\n" + json.dumps(field_map, ensure_ascii=False, indent=2) + "\n\nSEED MT700:\n" + seed_mt700,
+            max_tokens=2200
+        )
 
-        validation = merge_validation(local_val, llm_val)
+        validation = validate_mt700(mt700)
 
-        if mt700 and (not validation.get("is_valid", False) or validation.get("score", 0) < 90):
-            try:
-                repair_input = (
-                    "EXTRACTED DOCUMENTS:\n" + full_text[:14000] +
-                    "\n\nMT700 DRAFT:\n" + mt700 +
-                    "\n\nVALIDATION FINDINGS:\n" + json.dumps(validation, indent=2)
-                )
-                repaired = call_llm_text(CORRECTION_PROMPT, repair_input, max_tokens=1800)
-                local_val_2 = local_validate(repaired)
-
-                llm_val_2 = None
-                try:
-                    llm_val_2 = call_llm_json(VAL_PROMPT, repaired, VALIDATION_SCHEMA, max_tokens=1000)
-                    if not llm_val_2:
-                        llm_val_2 = None
-                except Exception:
-                    llm_val_2 = None
-
-                validation_2 = merge_validation(local_val_2, llm_val_2)
-                if validation_2.get("score", 0) >= validation.get("score", 0):
-                    mt700 = repaired
-                    validation = validation_2
-            except Exception as e:
-                st.warning(f"No se pudo reparar automáticamente el MT700: {str(e)}")
-
-        st.session_state["source_text"] = full_text
-        st.session_state["extraction"] = extraction
+        st.session_state["source_text"] = source_text
+        st.session_state["field_map"] = field_map
         st.session_state["mt700"] = mt700
         st.session_state["validation"] = validation
-        st.session_state["score"] = calculate_score(mt700, validation)
-        st.session_state["pdf_mode"] = pdf_mode
-        st.session_state["debug_per_file"] = debug_per_file
         st.success("✅ Generado")
 
 if "mt700" in st.session_state:
-    render_extraction_summary(st.session_state["extraction"])
-    st.divider()
-
-    with st.expander("🧪 Debug extracción guardado", expanded=False):
-        st.json(st.session_state.get("debug_per_file", []))
-        st.text_area(
-            "Texto fuente persistido",
-            st.session_state.get("source_text", "")[:4000],
-            height=250
-        )
+    with st.expander("🧪 Debug persistido", expanded=False):
+        st.json(st.session_state.get("field_map", {}))
+        st.text_area("Texto fuente persistido", st.session_state.get("source_text", "")[:5000], height=280)
 
     col1, col2 = st.columns([2, 1])
     with col1:
-        edited_mt700 = st.text_area("📡 MT700", st.session_state["mt700"], height=520)
+        edited = st.text_area("📡 MT700", st.session_state["mt700"], height=650)
     with col2:
-        st.metric("Confianza", f"{st.session_state['score']}%")
-        st.write("**Modo PDF solicitado:**", st.session_state.get("pdf_mode", "auto"))
-        if st.session_state["score"] >= 90:
-            st.success("✅ High confidence")
-        elif st.session_state["score"] >= 70:
-            st.warning("⚠️ Review required")
-        else:
-            st.error("❌ Do not issue")
+        st.metric("Confianza", f"{st.session_state['validation']['score']}%")
         st.json(st.session_state["validation"])
 
-    parsed = parse_mt700_fields(edited_mt700)
-    st.divider()
+    parsed = parse_mt700_fields(edited)
     st.subheader("🧩 Campos parseados")
     st.json(parsed)
 
-    st.divider()
-    st.subheader("📋 Errores por campo")
-    rows = build_error_table(st.session_state["validation"])
-    if rows:
-        st.dataframe(rows, use_container_width=True)
-    else:
-        st.success("No errors or warnings detected")
-
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("🛠️ Regenerate defective fields only"):
-            defective = st.session_state["validation"].get("defective_fields", [])
-            if not defective:
-                st.info("No defective fields detected")
-            else:
-                try:
-                    repair_input = (
-                        "EXTRACTED DOCUMENTS:\n" + st.session_state["source_text"][:14000] +
-                        "\n\nCURRENT MT700:\n" + edited_mt700 +
-                        "\n\nDEFECTIVE FIELDS:\n" + ", ".join(defective)
-                    )
-                    fixed = call_llm_text(FIELD_FIX_PROMPT, repair_input, max_tokens=1800)
-                    local_val_3 = local_validate(fixed)
-
-                    llm_val_3 = None
-                    try:
-                        llm_val_3 = call_llm_json(VAL_PROMPT, fixed, VALIDATION_SCHEMA, max_tokens=1000)
-                        if not llm_val_3:
-                            llm_val_3 = None
-                    except Exception:
-                        llm_val_3 = None
-
-                    validation_3 = merge_validation(local_val_3, llm_val_3)
-                    st.session_state["mt700"] = fixed
-                    st.session_state["validation"] = validation_3
-                    st.session_state["score"] = calculate_score(fixed, validation_3)
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Error regenerating defective fields: {str(e)}")
-
-    with col_b:
-        if st.button("✅ Approve"):
-            st.success("MT700 approved ✅")
-
-    txt_data = edited_mt700.encode("utf-8")
+    txt_data = edited.encode("utf-8")
     json_data = json.dumps({
-        "extraction": st.session_state["extraction"],
+        "field_map": st.session_state["field_map"],
         "validation": st.session_state["validation"],
-        "parsed_fields": parsed,
-        "score": st.session_state["score"],
-        "pdf_mode": st.session_state.get("pdf_mode", "auto"),
-        "debug_per_file": st.session_state.get("debug_per_file", [])
+        "parsed_fields": parsed
     }, ensure_ascii=False, indent=2).encode("utf-8")
 
-    d1, d2 = st.columns(2)
-    with d1:
-        st.download_button("⬇️ Download MT700 TXT", txt_data, file_name="MT700.txt", mime="text/plain")
-    with d2:
-        st.download_button("⬇️ Download validation JSON", json_data, file_name="MT700_validation.json", mime="application/json")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button("⬇️ Descargar MT700 TXT", txt_data, file_name="MT700.txt", mime="text/plain")
+    with c2:
+        st.download_button("⬇️ Descargar validación JSON", json_data, file_name="MT700_validation.json", mime="application/json")
